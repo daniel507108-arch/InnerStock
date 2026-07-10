@@ -13,13 +13,13 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r backend/requirements.txt
-      - run: python -m py_compile backend/*.py
+      - run: python -m py_compile Backend/*.py
 
   frontend-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
-        with:
+        with:git status
           node-version: "20"
-      - run: cd frontend && npm install && npm run build
+      - run: cd Frontend && npm install && npm run build
