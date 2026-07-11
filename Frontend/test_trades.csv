@@ -1,0 +1,3 @@
+ticker,action,quantity,price_per_share,trade_date,thesis_text,conviction_score,review_date
+AAPL,buy,10,195.50,2026-07-10,Strong iPhone sales momentum,4,2026-07-31
+MSFT,buy,5,410.00,2026-07-09,Azure growth continuing,3,2026-07-30

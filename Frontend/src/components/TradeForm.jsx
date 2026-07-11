@@ -79,30 +79,58 @@ function TradeForm() {
       setErrorMessage(err.message)
     }
   }
+  const labelStyle = { display: "flex", flexDirection: "column", gap: "0.25rem", fontSize: "0.9rem" }
+ return (
+  <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "0.5rem", maxWidth: "300px" }}>
+    <label style={labelStyle}>
+      Ticker
+      <input name="ticker" value={form.ticker} onChange={handleChange} placeholder="e.g. AAPL" />
+    </label>
 
-  return (
-    <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "0.5rem", maxWidth: "300px" }}>
-      <input name="ticker" value={form.ticker} onChange={handleChange} placeholder="Ticker (e.g. AAPL)" />
-
+    <label style={labelStyle}>
+      Buy or Sell
       <select name="action" value={form.action} onChange={handleChange}>
         <option value="buy">Buy</option>
         <option value="sell">Sell</option>
       </select>
+    </label>
 
-      <input name="quantity" type="number" value={form.quantity} onChange={handleChange} placeholder="Quantity" />
-      <input name="price_per_share" type="number" value={form.price_per_share} onChange={handleChange} placeholder="Price per share" />
+    <label style={labelStyle}>
+      Quantity
+      <input name="quantity" type="number" value={form.quantity} onChange={handleChange} />
+    </label>
+
+    <label style={labelStyle}>
+      Price per Share
+      <input name="price_per_share" type="number" value={form.price_per_share} onChange={handleChange} />
+    </label>
+
+    <label style={labelStyle}>
+      Trade Date
       <input name="trade_date" type="date" value={form.trade_date} onChange={handleChange} />
-      <textarea name="thesis_text" value={form.thesis_text} onChange={handleChange} placeholder="Why are you making this trade?" />
+    </label>
+
+    <label style={labelStyle}>
+      Your Thesis (why are you making this trade?)
+      <textarea name="thesis_text" value={form.thesis_text} onChange={handleChange} />
+    </label>
+
+    <label style={labelStyle}>
+      Conviction Score (1–5)
       <input name="conviction_score" type="number" min="1" max="5" value={form.conviction_score} onChange={handleChange} />
+    </label>
+
+    <label style={labelStyle}>
+      Review Date (when should this thesis be revisited?)
       <input name="review_date" type="date" value={form.review_date} onChange={handleChange} />
+    </label>
 
-      <button type="submit">Log Trade</button>
+    <button type="submit">Log Trade</button>
 
-      {/* Only shows up once status actually changes from null */}
-      {status === "success" && <p style={{ color: "green" }}>Trade logged successfully.</p>}
-      {status === "error" && <p style={{ color: "red" }}>{errorMessage}</p>}
-    </form>
-  )
+    {status === "success" && <p style={{ color: "green" }}>Trade logged successfully.</p>}
+    {status === "error" && <p style={{ color: "red" }}>{errorMessage}</p>}
+  </form>
+)
 }
 
 export default TradeForm
