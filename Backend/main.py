@@ -16,6 +16,8 @@ from models import Trade
 # so FastAPI can validate it automatically before our code even runs
 from pydantic import BaseModel
 from datetime import date
+from models import Trade, PriceCache
+from datetime import date, datetime, timedelta
 
 # Create the actual app instance. Everything below attaches to this "app" object.
 app = FastAPI()
@@ -40,7 +42,7 @@ def get_db():
     finally:
         db.close()
 
-# This defines exactly what fields a new trade submission must contain.
+# This defines exactly what fields a new trade submission must contain, taken from Pydantic
 # If someone sends data missing a required field or with the wrong type,
 # FastAPI automatically rejects it with a clear error - before our code runs.
 class TradeCreate(BaseModel):
@@ -65,29 +67,77 @@ def root():
 def test_connection():
     return {"status": "connected", "data": "Hello from FastAPI!"}
 
-# This route has {ticker} in the URL - that means the URL itself carries info.
-# Visiting /stock/AAPL or /stock/TSLA both hit this same function, just with
-# a different value for "ticker" each time.
+# This route now checks the cache first, and only calls yfinance
+# if the cached data is missing or older than 15 minutes.
 @app.get("/stock/{ticker}")
-def get_stock(ticker: str):
-    # Ask yfinance for this specific company's data
+def get_stock(ticker: str, db: Session = Depends(get_db)):
+    ticker = ticker.upper()  # normalize so "aapl" and "AAPL" match the same cache row
+
+    # Check the database for an already-saved price entry for this ticker
+    # (returns None if this ticker has never been cached before)
+    cached = db.query(PriceCache).filter(PriceCache.ticker == ticker).first()
+
+    # Only trust the cache if it exists AND has a timestamp
+    if cached and cached.last_updated:
+        # How much time has passed since this was last saved?
+        age = datetime.utcnow() - cached.last_updated
+
+        # If it's less than 15 minutes old, it's fresh enough to use
+        if age < timedelta(minutes=15):
+            # Return the cached data directly - skip calling yfinance entirely
+            return {
+                "ticker": cached.ticker,
+                "price": float(cached.current_price),
+                "market_cap": float(cached.market_cap) if cached.market_cap else None,
+                "pe_ratio": float(cached.pe_ratio) if cached.pe_ratio else None,
+                "sector": cached.sector,
+                "source": "cache"
+            }
+
+    # If we get here, there's no cache, or it's too old - fetch fresh data
     stock = yf.Ticker(ticker)
     info = stock.info
 
-    # Pull out just the fields we actually need, and package them into
-    # clean JSON. Yahoo's raw data has dozens of extra fields we don't need.
+    price = info.get("currentPrice")
+    market_cap = info.get("marketCap")
+    pe_ratio = info.get("trailingPE")
+    sector = info.get("sector")
+
+    if cached:
+        # A row already exists for this ticker - just update it with fresh values
+        cached.current_price = price
+        cached.market_cap = market_cap
+        cached.pe_ratio = pe_ratio
+        cached.sector = sector
+        cached.last_updated = datetime.utcnow()
+    else:
+        # No row exists yet for this ticker - create a brand new one
+        cached = PriceCache(
+            ticker=ticker,
+            current_price=price,
+            market_cap=market_cap,
+            pe_ratio=pe_ratio,
+            sector=sector,
+            last_updated=datetime.utcnow()
+        )
+        db.add(cached)  # stage the new row for saving
+
+    db.commit()  # actually save the update/insert to the database
+
+    # Return the freshly-fetched data
     return {
         "ticker": ticker,
-        "price": info.get("currentPrice"),
-        "market_cap": info.get("marketCap"),
-        "pe_ratio": info.get("trailingPE"),
-        "sector": info.get("sector")
+        "price": price,
+        "market_cap": market_cap,
+        "pe_ratio": pe_ratio,
+        "sector": sector,
+        "source": "yfinance"
     }
 
 # Creates a new trade. Takes JSON matching the TradeCreate shape above,
 # saves it to the database, and returns the saved trade (now with an id).
-@app.post("/trades")
-def create_trade(trade: TradeCreate, db: Session = Depends(get_db)):
+@app.post("/trades") # When front end sents POST request to /trades this will run
+def create_trade(trade: TradeCreate, db: Session = Depends(get_db)): #Uses function get_db to open a connection to database
     new_trade = Trade(
         user_id=1,  # hardcoded for now - matches your single-user MVP decision
         ticker=trade.ticker,
