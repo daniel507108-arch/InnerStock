@@ -1,6 +1,7 @@
 // useState: lets a component "remember" a value and re-display automatically when it changes
 // useEffect: lets us run code at a specific moment (here: right when the page first loads)
 import { useState, useEffect } from 'react'
+import TradeForm from './components/TradeForm'
 
 function App() {
   // Create a piece of data called "message", starting as "Loading..."
@@ -23,6 +24,7 @@ function App() {
     <div style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
       <h1>InnerStock</h1>
       <p>Backend says: {message}</p>
+      <TradeForm />
     </div>
   )
 }

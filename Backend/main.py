@@ -15,7 +15,7 @@ app = FastAPI()
 # one explicitly allows it. This block gives that permission.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # only allow requests from our React app's address
+    allow_origins=["http://localhost:5173", "http://localhost:5174"],  # only allow requests from our React app's address
     allow_methods=["*"],                       # allow all request types (GET, POST, etc.)
     allow_headers=["*"],                       # allow all header types
 )
