@@ -9,7 +9,7 @@ class User(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
 
-
+#THE TRADE OBJECT 
 class Trade(Base):
     __tablename__ = "trades"
 
