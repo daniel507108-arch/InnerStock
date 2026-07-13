@@ -16,6 +16,17 @@ from models import Trade
 # so FastAPI can validate it automatically before our code even runs
 from pydantic import BaseModel
 from datetime import date
+from models import Trade, PriceCache
+from datetime import date, datetime, timedelta
+
+#FOR THE CLAUDE API
+from dotenv import load_dotenv
+import os
+import anthropic
+
+load_dotenv()
+
+claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 # Create the actual app instance. Everything below attaches to this "app" object.
 app = FastAPI()
@@ -40,7 +51,7 @@ def get_db():
     finally:
         db.close()
 
-# This defines exactly what fields a new trade submission must contain.
+# This defines exactly what fields a new trade submission must contain, taken from Pydantic
 # If someone sends data missing a required field or with the wrong type,
 # FastAPI automatically rejects it with a clear error - before our code runs.
 class TradeCreate(BaseModel):
@@ -65,30 +76,78 @@ def root():
 def test_connection():
     return {"status": "connected", "data": "Hello from FastAPI!"}
 
-# This route has {ticker} in the URL - that means the URL itself carries info.
-# Visiting /stock/AAPL or /stock/TSLA both hit this same function, just with
-# a different value for "ticker" each time.
+# This route now checks the cache first, and only calls yfinance
+# if the cached data is missing or older than 15 minutes.
 @app.get("/stock/{ticker}")
-def get_stock(ticker: str):
-    # Ask yfinance for this specific company's data
+def get_stock(ticker: str, db: Session = Depends(get_db)):
+    ticker = ticker.upper()  # normalize so "aapl" and "AAPL" match the same cache row
+
+    # Check the database for an already-saved price entry for this ticker
+    # (returns None if this ticker has never been cached before)
+    cached = db.query(PriceCache).filter(PriceCache.ticker == ticker).first()
+
+    # Only trust the cache if it exists AND has a timestamp
+    if cached and cached.last_updated:
+        # How much time has passed since this was last saved?
+        age = datetime.utcnow() - cached.last_updated
+
+        # If it's less than 15 minutes old, it's fresh enough to use
+        if age < timedelta(minutes=15):
+            # Return the cached data directly - skip calling yfinance entirely
+            return {
+                "ticker": cached.ticker,
+                "price": float(cached.current_price),
+                "market_cap": float(cached.market_cap) if cached.market_cap else None,
+                "pe_ratio": float(cached.pe_ratio) if cached.pe_ratio else None,
+                "sector": cached.sector,
+                "source": "cache"
+            }
+
+    # If we get here, there's no cache, or it's too old - fetch fresh data
     stock = yf.Ticker(ticker)
     info = stock.info
 
-    # Pull out just the fields we actually need, and package them into
-    # clean JSON. Yahoo's raw data has dozens of extra fields we don't need.
+    price = info.get("currentPrice")
+    market_cap = info.get("marketCap")
+    pe_ratio = info.get("trailingPE")
+    sector = info.get("sector")
+
+    if cached:
+        # A row already exists for this ticker - just update it with fresh values
+        cached.current_price = price
+        cached.market_cap = market_cap
+        cached.pe_ratio = pe_ratio
+        cached.sector = sector
+        cached.last_updated = datetime.utcnow()
+    else:
+        # No row exists yet for this ticker - create a brand new one
+        cached = PriceCache(
+            ticker=ticker,
+            current_price=price,
+            market_cap=market_cap,
+            pe_ratio=pe_ratio,
+            sector=sector,
+            last_updated=datetime.utcnow()
+        )
+        db.add(cached)  # stage the new row for saving
+
+    db.commit()  # actually save the update/insert to the database
+
+    # Return the freshly-fetched data
     return {
         "ticker": ticker,
-        "price": info.get("currentPrice"),
-        "market_cap": info.get("marketCap"),
-        "pe_ratio": info.get("trailingPE"),
-        "sector": info.get("sector")
+        "price": price,
+        "market_cap": market_cap,
+        "pe_ratio": pe_ratio,
+        "sector": sector,
+        "source": "yfinance"
     }
 
 # Creates a new trade. Takes JSON matching the TradeCreate shape above,
 # saves it to the database, and returns the saved trade (now with an id).
-@app.post("/trades")
-def create_trade(trade: TradeCreate, db: Session = Depends(get_db)):
-    new_trade = Trade(
+@app.post("/trades") # When front end sents POST request to /trades this will run
+def create_trade(trade: TradeCreate, db: Session = Depends(get_db)): #Uses function get_db to open a connection to database
+    new_trade = Trade( #CONSTRUCTOR
         user_id=1,  # hardcoded for now - matches your single-user MVP decision
         ticker=trade.ticker,
         action=trade.action,
@@ -108,3 +167,95 @@ def create_trade(trade: TradeCreate, db: Session = Depends(get_db)):
 @app.get("/trades")
 def get_trades(db: Session = Depends(get_db)):
     return db.query(Trade).all()
+
+# Puts all trades into current holdings, calculates each position's
+# share of the total portfolio, and flags any position over 20%.
+@app.get("/holdings")
+def get_holdings(db: Session = Depends(get_db)):
+    trades = db.query(Trade).all()  # get every trade ever saved from database
+
+    # Step 1: tally net shares held per ticker (buys add, sells subtract)
+    holdings = {}
+    for trade in trades: #Loop through every trade
+        if trade.ticker not in holdings:
+            holdings[trade.ticker] = 0  # first time seeing this ticker - start at 0
+        if trade.action == "buy":
+            holdings[trade.ticker] += float(trade.quantity)
+        elif trade.action == "sell":
+            holdings[trade.ticker] -= float(trade.quantity)
+
+    # Step 2: drop any ticker fully sold out (0 or negative shares left)
+    holdings = {ticker: shares for ticker, shares in holdings.items() if shares > 0}
+
+    # Step 3: look up current price for each holding, calculate dollar value
+    holdings_list = []
+    total_value = 0
+
+    for ticker, shares in holdings.items():
+        cached = db.query(PriceCache).filter(PriceCache.ticker == ticker).first()
+        current_price = float(cached.current_price) if cached else 0  # 0 if never cached
+        value = shares * current_price
+        total_value += value  # add to running portfolio total
+
+        holdings_list.append({
+            "ticker": ticker,
+            "shares": shares,
+            "current_price": current_price,
+            "value": value
+        })
+
+    # Step 4: now that total_value is known, calculate each holding's % share
+    for holding in holdings_list:
+        if total_value > 0:
+            percentage = (holding["value"] / total_value) * 100
+        else:
+            percentage = 0  # avoid dividing by zero if portfolio is empty
+
+        holding["percentage"] = round(percentage, 2)
+        holding["overweight_flag"] = percentage > 20  # True/False risk flag
+
+    return {
+        "holdings": holdings_list,  # array of per-stock dictionaries
+        "total_value": total_value
+    }
+
+# Uses Claude to generate a bull case, bear case, and key risk for a given
+# ticker, based on data we already have cached (no new yfinance call needed).
+@app.get("/bullbear/{ticker}")
+def get_bull_bear(ticker: str, db: Session = Depends(get_db)):
+    ticker = ticker.upper()  # normalize so "aapl" and "AAPL" match the same cache row
+
+    # Look up this ticker's cached price data - we'll use it as context for Claude
+    cached = db.query(PriceCache).filter(PriceCache.ticker == ticker).first()
+
+    # If we've never cached this ticker, there's no data to base the analysis on
+    if not cached:
+        return {"error": "No cached data for this ticker yet - visit /stock/{ticker} first"}
+
+    # Build the actual prompt we'll send to Claude, injecting real cached
+    # data directly into the text so the response is grounded in real numbers
+    prompt = f"""Give a brief bull case, bear case, and key risk for {ticker} stock.
+Current price: {cached.current_price}
+Sector: {cached.sector}
+P/E ratio: {cached.pe_ratio}
+Market cap: {cached.market_cap}
+
+Format your response as:
+Bull Case: [1-2 sentences]
+Bear Case: [1-2 sentences]
+Key Risk: [1 sentence]"""
+
+    # Send the prompt to Claude and wait for a response.
+    # max_tokens caps how long the reply can be, keeping it short and cheap.
+    message = claude_client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=300,
+        messages=[{"role": "user", "content": prompt}]
+    )
+
+    # Claude's reply comes back as a list of content blocks - [0].text
+    # grabs just the plain text of the first (and only) block here
+    return {
+        "ticker": ticker,
+        "analysis": message.content[0].text
+    }
