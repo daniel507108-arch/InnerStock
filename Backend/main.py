@@ -24,6 +24,11 @@ from dotenv import load_dotenv
 import os
 import anthropic
 
+#FILE UPLOADING
+from fastapi import UploadFile, File
+import csv
+import io
+
 load_dotenv()
 
 claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
@@ -258,4 +263,87 @@ Key Risk: [1 sentence]"""
     return {
         "ticker": ticker,
         "analysis": message.content[0].text
+    }
+
+# Accepts a CSV file upload, validates each row using the same rules as
+# POST /trades, saves valid rows, and reports errors for invalid ones
+# without rejecting the whole file.
+@app.post("/trades/import")
+async def import_trades(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    contents = await file.read()
+    decoded = contents.decode("utf-8")
+    reader = csv.DictReader(io.StringIO(decoded))
+
+    successful_count = 0
+    errors = []
+
+    # enumerate starting at 1, matching "first data row = row 1" (header doesn't count)
+    for row_num, row in enumerate(reader, start=1):
+        try:
+            ticker = (row.get("ticker") or "").strip()
+            if not ticker:
+                raise ValueError("ticker must not be empty")
+
+            action = (row.get("action") or "").strip().lower()
+            if action not in ("buy", "sell"):
+                raise ValueError('action must be "buy" or "sell"')
+
+            try:
+                quantity = float(row.get("quantity"))
+            except (ValueError, TypeError):
+                raise ValueError("quantity must be a number")
+            if quantity <= 0:
+                raise ValueError("quantity must be greater than 0")
+
+            try:
+                price_per_share = float(row.get("price_per_share"))
+            except (ValueError, TypeError):
+                raise ValueError("price_per_share must be a number")
+            if price_per_share <= 0:
+                raise ValueError("price_per_share must be greater than 0")
+
+            try:
+                trade_date = date.fromisoformat((row.get("trade_date") or "").strip())
+            except ValueError:
+                raise ValueError("trade_date must be a valid date (YYYY-MM-DD)")
+
+            thesis_text = (row.get("thesis_text") or "").strip()
+            if not thesis_text:
+                raise ValueError("thesis_text must not be empty")
+
+            try:
+                conviction_score = int(row.get("conviction_score"))
+            except (ValueError, TypeError):
+                raise ValueError("conviction_score must be an integer")
+            if conviction_score < 1 or conviction_score > 5:
+                raise ValueError("conviction_score must be between 1 and 5")
+
+            try:
+                review_date = date.fromisoformat((row.get("review_date") or "").strip())
+            except ValueError:
+                raise ValueError("review_date must be a valid date (YYYY-MM-DD)")
+
+            # all checks passed - save this row
+            new_trade = Trade(
+                user_id=1,
+                ticker=ticker,
+                action=action,
+                quantity=quantity,
+                price_per_share=price_per_share,
+                trade_date=trade_date,
+                thesis_text=thesis_text,
+                conviction_score=conviction_score,
+                review_date=review_date,
+            )
+            db.add(new_trade)
+            db.commit()
+            successful_count += 1
+
+        except ValueError as e:
+            db.rollback()  # undo any partial change for this failed row
+            errors.append({"row": row_num, "message": str(e)})
+
+    return {
+        "successful_count": successful_count,
+        "errors": errors
     }

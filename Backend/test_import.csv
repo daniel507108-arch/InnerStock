@@ -1,0 +1,5 @@
+ticker,action,quantity,price_per_share,trade_date,thesis_text,conviction_score,review_date
+   MSFT,buy,5,420.50,2026-07-01,Cloud growth continuing,4,2026-08-01
+   GOOGL,buy,3,175.20,2026-07-02,Search dominance intact,3,2026-08-02
+   TSLA,sell,2,250.00,2026-07-03,Taking profits,5,2026-08-03
+   NFLX,buy,1,600.00,2026-07-04,Bad conviction score,7,2026-08-04
