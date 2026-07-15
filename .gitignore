@@ -14,4 +14,4 @@ dist/
 build/
 
 # VS Code settings
-.vscode/
+.vscode/Backend/*.db
