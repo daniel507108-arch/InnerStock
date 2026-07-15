@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import TradeForm from './components/TradeForm'
 import CsvUpload from "./components/CsvUpload"
+import HoldingsTable from "./components/HoldingsTable"
 
 function App() {
   // Create a piece of data called "message", starting as "Loading..."
@@ -27,6 +28,7 @@ function App() {
       <p>Backend says: {message}</p>
       <TradeForm />
       <CsvUpload />
+      <HoldingsTable />
     </div>
   )
 }
