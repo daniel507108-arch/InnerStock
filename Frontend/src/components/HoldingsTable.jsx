@@ -24,6 +24,7 @@ function HoldingsTable() {
       })
   }, []) // empty [] means "run this once, right when the component first appears"
 
+  
   // Three possible states, checked in order, top to bottom:
 
   if (loading) {
@@ -38,6 +39,8 @@ function HoldingsTable() {
     return <p>No holdings yet — log a trade to get started.</p>
   }
 
+const overweightHoldings = holdings.filter(h => h.overweight_flag)
+  
   // Only reached once loading is done, there's no error, AND holdings has data.
   return (
   <div>
@@ -46,7 +49,22 @@ function HoldingsTable() {
       .holdings-table th, .holdings-table td { padding: 0.5rem 1rem; text-align: left; border-bottom: 1px solid #333; }
       .holdings-table th { background: #1a1a1a; }
       .holdings-table tbody tr:nth-child(even) { background: #111; }
+      .concentration-alert { background: #3a1a1a; border: 1px solid #cc4444; color: #ffb3b3; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; }
+      .concentration-alert ul { margin: 0.5rem 0 0 1.25rem; }
     `}</style>
+
+{overweightHoldings.length > 0 && (
+             <div className="concentration-alert">
+                <strong>⚠️ Concentration Warning</strong>
+                 <ul>
+                    {overweightHoldings.map((h) => (
+                        <li key={h.ticker}>
+                            {h.ticker} makes up {h.percentage.toFixed(1)}% of your portfolio — consider whether this level of concentration matches your risk tolerance.
+                        </li>
+                     ))}
+                 </ul>
+             </div>
+            )}
 
     <table className="holdings-table">
       <thead>
