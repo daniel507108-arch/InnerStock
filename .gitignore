@@ -14,4 +14,7 @@ dist/
 build/
 
 # VS Code settings
-.vscode/Backend/*.db
+.vscode/
+
+# Database files (each teammate keeps their own local copy)
+Backend/*.db
