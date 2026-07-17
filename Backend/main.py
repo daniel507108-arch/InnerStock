@@ -1,5 +1,6 @@
 # Import the main FastAPI class - this is the toolkit that lets us build a web server
 from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException
 
 # Import CORS middleware - this handles the "permission" between frontend and backend
 from fastapi.middleware.cors import CORSMiddleware
@@ -108,11 +109,24 @@ def get_stock(ticker: str, db: Session = Depends(get_db)):
                 "source": "cache"
             }
 
-    # If we get here, there's no cache, or it's too old - fetch fresh data
-    stock = yf.Ticker(ticker)
-    info = stock.info
+    # If we get here, there's no cache, or it's too old - fetch fresh data.
+    # Wrapped in try/except because yfinance can raise its own errors for
+    # completely broken/unreachable tickers, instead of just returning empty data.
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+    except Exception:
+        raise HTTPException(status_code=404, detail=f"Could not fetch data for ticker '{ticker}'")
 
     price = info.get("currentPrice")
+
+    # yfinance doesn't always raise an error for invalid tickers - sometimes it
+    # just returns a mostly-empty dict instead. No price means this ticker is
+    # invalid/unrecognized, so we stop here with a clean error instead of
+    # letting bad data (None) flow into the database and crash later.
+    if price is None:
+        raise HTTPException(status_code=404, detail=f"Ticker '{ticker}' not found or has no price data")
+
     market_cap = info.get("marketCap")
     pe_ratio = info.get("trailingPE")
     sector = info.get("sector")
@@ -181,13 +195,15 @@ def get_holdings(db: Session = Depends(get_db)):
 
     # Step 1: tally net shares held per ticker (buys add, sells subtract)
     holdings = {}
-    for trade in trades: #Loop through every trade
-        if trade.ticker not in holdings:
-            holdings[trade.ticker] = 0  # first time seeing this ticker - start at 0
+    fholdings = {}
+    for trade in trades:
+        ticker = trade.ticker.upper()  # normalize so it matches the cache's uppercase keys
+        if ticker not in holdings:
+            holdings[ticker] = 0 
         if trade.action == "buy":
-            holdings[trade.ticker] += float(trade.quantity)
+            holdings[ticker] += float(trade.quantity)
         elif trade.action == "sell":
-            holdings[trade.ticker] -= float(trade.quantity)
+            holdings[ticker] -= float(trade.quantity)
 
     # Step 2: drop any ticker fully sold out (0 or negative shares left)
     holdings = {ticker: shares for ticker, shares in holdings.items() if shares > 0}
