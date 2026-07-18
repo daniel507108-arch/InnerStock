@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react"
+import SentimentBadge from "./SentimentBadge"
 
 function HoldingsTable() {
   // Starts as an empty array — there's nothing to show before the fetch finishes.
@@ -51,6 +52,12 @@ const overweightHoldings = holdings.filter(h => h.overweight_flag)
       .holdings-table tbody tr:nth-child(even) { background: #111; }
       .concentration-alert { background: #3a1a1a; border: 1px solid #cc4444; color: #ffb3b3; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; }
       .concentration-alert ul { margin: 0.5rem 0 0 1.25rem; }
+      .sentiment-badge { padding: 0.15rem 0.5rem; border-radius: 12px; font-size: 0.8rem; text-transform: capitalize; }
+      .sentiment-positive { background: #1a3a1a; color: #8fd88f; }
+      .sentiment-negative { background: #3a1a1a; color: #ffb3b3; }
+      .sentiment-neutral { background: #2a2a2a; color: #aaa; }
+      .sentiment-loading { color: #666; }
+      .sentiment-unavailable { color: #555; }
     `}</style>
 
 {overweightHoldings.length > 0 && (
@@ -74,6 +81,7 @@ const overweightHoldings = holdings.filter(h => h.overweight_flag)
           <th>Current Price</th>
           <th>Value</th>
           <th>% of Portfolio</th>
+          <th>Sentiment</th>
         </tr>
       </thead>
       <tbody>
@@ -84,6 +92,7 @@ const overweightHoldings = holdings.filter(h => h.overweight_flag)
             <td>${h.current_price.toFixed(2)}</td>
             <td>${h.value.toFixed(2)}</td>
             <td>{h.percentage.toFixed(1)}%</td>
+            <td><SentimentBadge ticker={h.ticker} /></td>
           </tr>
         ))}
       </tbody>
