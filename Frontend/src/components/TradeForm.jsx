@@ -80,11 +80,32 @@ function TradeForm() {
     }
   }
   const labelStyle = { display: "flex", flexDirection: "column", gap: "0.25rem", fontSize: "0.9rem" }
+
+async function handleTickerBlur() {
+  // Don't bother if there's no ticker typed, or if the user already
+  // manually entered a price — never overwrite something they typed themselves.
+  if (!form.ticker || form.price_per_share !== "") return
+
+  try {
+    const response = await fetch(`http://127.0.0.1:8000/stock/${form.ticker}`)
+    if (!response.ok) return // invalid ticker, or a graceful error — just leave price blank, no big deal
+
+    const data = await response.json()
+    if (data.price) {
+      setForm((prev) => ({ ...prev, price_per_share: data.price }))
+    }
+  } catch (err) {
+    // A convenience feature failing shouldn't interrupt the user —
+    // fail silently, they can just type the price manually.
+  }
+}
+
  return (
   <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "0.5rem", maxWidth: "300px" }}>
     <label style={labelStyle}>
       Ticker
-      <input name="ticker" value={form.ticker} onChange={handleChange} placeholder="e.g. AAPL" />
+      <input name="ticker" value={form.ticker} onChange={(e) => setForm((prev) => ({ ...prev, ticker: e.target.value.toUpperCase() }))} onBlur={handleTickerBlur} placeholder="e.g. AAPL"
+      />
     </label>
 
     <label style={labelStyle}>
