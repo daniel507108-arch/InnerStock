@@ -77,69 +77,47 @@ def root():
     # FastAPI automatically converts this Python dictionary into JSON for us.
     return {"message": "InnerStock backend is running"}
 
-# A second route, specifically for testing the frontend-backend connection.
-@app.get("/test")
-def test_connection():
-    return {"status": "connected", "data": "Hello from FastAPI!"}
+# Shared logic: returns cached price data if fresh, otherwise fetches from
+# yfinance, saves it to the cache, and returns it. Used by both /stock/{ticker}
+# and /holdings, so a holding never shows $0 just because nobody visited
+# /stock/{ticker} for it first.
+def get_or_fetch_price(ticker: str, db: Session):
+    ticker = ticker.upper()
 
-# This route now checks the cache first, and only calls yfinance
-# if the cached data is missing or older than 15 minutes.
-@app.get("/stock/{ticker}")
-def get_stock(ticker: str, db: Session = Depends(get_db)):
-    ticker = ticker.upper()  # normalize so "aapl" and "AAPL" match the same cache row
-
-    # Check the database for an already-saved price entry for this ticker
-    # (returns None if this ticker has never been cached before)
     cached = db.query(PriceCache).filter(PriceCache.ticker == ticker).first()
 
-    # Only trust the cache if it exists AND has a timestamp
     if cached and cached.last_updated:
-        # How much time has passed since this was last saved?
         age = datetime.utcnow() - cached.last_updated
-
-        # If it's less than 15 minutes old, it's fresh enough to use
         if age < timedelta(minutes=15):
-            # Return the cached data directly - skip calling yfinance entirely
-            return {
-                "ticker": cached.ticker,
-                "price": float(cached.current_price),
-                "market_cap": float(cached.market_cap) if cached.market_cap else None,
-                "pe_ratio": float(cached.pe_ratio) if cached.pe_ratio else None,
-                "sector": cached.sector,
-                "source": "cache"
-            }
+            return cached  # fresh enough, return as-is
 
-    # If we get here, there's no cache, or it's too old - fetch fresh data.
-    # Wrapped in try/except because yfinance can raise its own errors for
-    # completely broken/unreachable tickers, instead of just returning empty data.
+    # No cache, or it's stale - fetch fresh data
     try:
         stock = yf.Ticker(ticker)
         info = stock.info
-    except Exception:
-        raise HTTPException(status_code=404, detail=f"Could not fetch data for ticker '{ticker}'")
+    except Exception as e:
+        # Fetch failed - log the actual error so it's visible in the terminal,
+        # instead of silently showing up as an unexplained $0 later.
+        print(f"yfinance fetch failed for {ticker}: {e}")
+        # Fall back to whatever old cached data exists (may be None)
+        # rather than crashing the whole request
+        return cached
 
     price = info.get("currentPrice")
-
-    # yfinance doesn't always raise an error for invalid tickers - sometimes it
-    # just returns a mostly-empty dict instead. No price means this ticker is
-    # invalid/unrecognized, so we stop here with a clean error instead of
-    # letting bad data (None) flow into the database and crash later.
     if price is None:
-        raise HTTPException(status_code=404, detail=f"Ticker '{ticker}' not found or has no price data")
+        return cached  # invalid ticker or no data - same fallback
 
     market_cap = info.get("marketCap")
     pe_ratio = info.get("trailingPE")
     sector = info.get("sector")
 
     if cached:
-        # A row already exists for this ticker - just update it with fresh values
         cached.current_price = price
         cached.market_cap = market_cap
         cached.pe_ratio = pe_ratio
         cached.sector = sector
         cached.last_updated = datetime.utcnow()
     else:
-        # No row exists yet for this ticker - create a brand new one
         cached = PriceCache(
             ticker=ticker,
             current_price=price,
@@ -148,18 +126,32 @@ def get_stock(ticker: str, db: Session = Depends(get_db)):
             sector=sector,
             last_updated=datetime.utcnow()
         )
-        db.add(cached)  # stage the new row for saving
+        db.add(cached)
 
-    db.commit()  # actually save the update/insert to the database
+    db.commit()
+    db.refresh(cached)
+    return cached
 
-    # Return the freshly-fetched data
+# --- /stock/{ticker} route ---
+# Now just calls the shared helper above and formats the response.
+# All the actual caching/fetching logic lives in get_or_fetch_price.
+@app.get("/stock/{ticker}")
+def get_stock(ticker: str, db: Session = Depends(get_db)):
+    ticker = ticker.upper()
+    cached = get_or_fetch_price(ticker, db) #Uses function above
+
+    # If the helper couldn't get real data (invalid ticker, fetch failed,
+    # and there was nothing cached to fall back on), return a clean error
+    if not cached:
+        raise HTTPException(status_code=404, detail=f"Ticker '{ticker}' not found or has no price data")
+
     return {
-        "ticker": ticker,
-        "price": price,
-        "market_cap": market_cap,
-        "pe_ratio": pe_ratio,
-        "sector": sector,
-        "source": "yfinance"
+        "ticker": cached.ticker,
+        "price": float(cached.current_price),
+        "market_cap": float(cached.market_cap) if cached.market_cap else None,
+        "pe_ratio": float(cached.pe_ratio) if cached.pe_ratio else None,
+        "sector": cached.sector,
+        "source": "cache/yfinance"
     }
 
 # Creates a new trade. Takes JSON matching the TradeCreate shape above,
@@ -195,7 +187,6 @@ def get_holdings(db: Session = Depends(get_db)):
 
     # Step 1: tally net shares held per ticker (buys add, sells subtract)
     holdings = {}
-    fholdings = {}
     for trade in trades:
         ticker = trade.ticker.upper()  # normalize so it matches the cache's uppercase keys
         if ticker not in holdings:
@@ -213,8 +204,8 @@ def get_holdings(db: Session = Depends(get_db)):
     total_value = 0
 
     for ticker, shares in holdings.items():
-        cached = db.query(PriceCache).filter(PriceCache.ticker == ticker).first()
-        current_price = float(cached.current_price) if cached else 0  # 0 if never cached
+        cached = get_or_fetch_price(ticker, db)  # fetches from yfinance automatically if not cached yet
+        current_price = float(cached.current_price) if cached else 0
         value = shares * current_price
         total_value += value  # add to running portfolio total
 
