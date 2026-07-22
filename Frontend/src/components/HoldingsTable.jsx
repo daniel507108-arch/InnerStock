@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react"
 import SentimentBadge from "./SentimentBadge"
 
-function HoldingsTable() {
+function HoldingsTable({ refreshKey }) {
   // Starts as an empty array — there's nothing to show before the fetch finishes.
   const [holdings, setHoldings] = useState([])
 
@@ -13,6 +13,7 @@ function HoldingsTable() {
   const [error, setError] = useState(null)
 
   useEffect(() => {
+    setLoading(true)
     fetch("http://127.0.0.1:8000/holdings")
       .then(response => response.json())
       .then(data => {
@@ -23,8 +24,7 @@ function HoldingsTable() {
         setError(error.message)
         setLoading(false) // failed, but also no longer "loading"
       })
-  }, []) // empty [] means "run this once, right when the component first appears"
-
+  }, [refreshKey]) // re-run whenever refreshKey changes, i.e. whenever a trade is logged
   
   // Three possible states, checked in order, top to bottom:
 
