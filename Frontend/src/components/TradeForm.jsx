@@ -1,6 +1,6 @@
 import { useState } from "react"
 
-function TradeForm() {
+function TradeForm({ onTradeLogged }) {
   // One object holding every field in the form, instead of a separate
   // useState for each — easier to manage as the form grows.
   const [form, setForm] = useState({
@@ -73,6 +73,7 @@ function TradeForm() {
         ticker: "", action: "buy", quantity: "", price_per_share: "",
         trade_date: "", thesis_text: "", conviction_score: 3, review_date: "",
       })
+      onTradeLogged() // tell App.jsx a trade was just logged
     } catch (err) {
       // Covers both backend errors above AND total failures (backend not running, network issue).
       setStatus("error")

@@ -4,11 +4,21 @@ import { useState, useEffect } from 'react'
 import TradeForm from './components/TradeForm'
 import CsvUpload from "./components/CsvUpload"
 import HoldingsTable from "./components/HoldingsTable"
+import ThesisReview from './components/ThesisReview'
 
 function App() {
   // Create a piece of data called "message", starting as "Loading..."
   // setMessage is the function we call whenever we want to change it
   const [message, setMessage] = useState('Loading...')
+
+  // A simple counter. Its actual number means nothing — the only thing
+  // that matters is that it CHANGES, which is what triggers a re-fetch.
+  const [refreshKey, setRefreshKey] = useState(0)
+
+  // Called by TradeForm or CsvUpload whenever a trade successfully saves.
+  function handleTradeLogged() {
+    setRefreshKey((prev) => prev + 1)
+  }
 
   // useEffect with an empty array [] at the end means:
   // "run this code once, right when the page first appears"
@@ -26,9 +36,10 @@ function App() {
     <div style={{ padding: '2rem', fontFamily: 'sans-serif' }}>
       <h1>InnerStock</h1>
       <p>Backend says: {message}</p>
-      <TradeForm />
-      <CsvUpload />
-      <HoldingsTable />
+      <TradeForm onTradeLogged={handleTradeLogged} />
+      <CsvUpload onTradeLogged={handleTradeLogged} />
+      <HoldingsTable refreshKey={refreshKey} />
+      <ThesisReview />
     </div>
   )
 }

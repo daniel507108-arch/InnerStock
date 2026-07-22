@@ -1,6 +1,6 @@
 import { useState } from "react"
 
-function CsvUpload() {
+function CsvUpload({ onTradeLogged }) {
   // Holds the actual file the user picked, or null if nothing's picked yet.
   const [file, setFile] = useState(null)
 
@@ -32,6 +32,9 @@ function CsvUpload() {
 
       const data = await response.json()
       setResults(data)
+      if (data.successful_count > 0) {
+        onTradeLogged() // only refresh if at least one row actually saved
+      }
     } catch (err) {
       setResults({ successful_count: 0, errors: [{ row: "-", message: err.message }] })
     }
