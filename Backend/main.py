@@ -183,16 +183,27 @@ def get_trades(db: Session = Depends(get_db)):
 # share of the total portfolio, and flags any position over 20%.
 @app.get("/holdings")
 def get_holdings(db: Session = Depends(get_db)):
-    trades = db.query(Trade).all()  # get every trade ever saved from database
+    trades = db.query(Trade).all()
 
     # Step 1: tally net shares held per ticker (buys add, sells subtract)
     holdings = {}
+    # NEW: separately track total cost and total quantity bought, for avg_cost.
+    # Only "buy" trades count here - selling shares doesn't change the
+    # average cost of the shares you still hold.
+    cost_tracking = {}
+
     for trade in trades:
-        ticker = trade.ticker.upper()  # normalize so it matches the cache's uppercase keys
+        ticker = trade.ticker.upper()
         if ticker not in holdings:
-            holdings[ticker] = 0 
+            holdings[ticker] = 0
+        if ticker not in cost_tracking:
+            cost_tracking[ticker] = {"total_cost": 0, "total_bought_qty": 0}
+
         if trade.action == "buy":
             holdings[ticker] += float(trade.quantity)
+            # accumulate cost basis for this ticker
+            cost_tracking[ticker]["total_cost"] += float(trade.quantity) * float(trade.price_per_share)
+            cost_tracking[ticker]["total_bought_qty"] += float(trade.quantity)
         elif trade.action == "sell":
             holdings[ticker] -= float(trade.quantity)
 
@@ -204,15 +215,23 @@ def get_holdings(db: Session = Depends(get_db)):
     total_value = 0
 
     for ticker, shares in holdings.items():
-        cached = get_or_fetch_price(ticker, db)  # fetches from yfinance automatically if not cached yet
+        cached = get_or_fetch_price(ticker, db)
         current_price = float(cached.current_price) if cached else 0
         value = shares * current_price
-        total_value += value  # add to running portfolio total
+        total_value += value
+
+        # NEW: calculate weighted average cost for this ticker
+        bought_qty = cost_tracking[ticker]["total_bought_qty"]
+        if bought_qty > 0:
+            avg_cost = cost_tracking[ticker]["total_cost"] / bought_qty
+        else:
+            avg_cost = 0  # shouldn't normally happen, but guards against divide-by-zero
 
         holdings_list.append({
             "ticker": ticker,
             "shares": shares,
             "current_price": current_price,
+            "avg_cost": round(avg_cost, 2),
             "value": value
         })
 
@@ -221,13 +240,13 @@ def get_holdings(db: Session = Depends(get_db)):
         if total_value > 0:
             percentage = (holding["value"] / total_value) * 100
         else:
-            percentage = 0  # avoid dividing by zero if portfolio is empty
+            percentage = 0
 
         holding["percentage"] = round(percentage, 2)
-        holding["overweight_flag"] = percentage > 20  # True/False risk flag
+        holding["overweight_flag"] = percentage > 20
 
     return {
-        "holdings": holdings_list,  # array of per-stock dictionaries
+        "holdings": holdings_list,
         "total_value": total_value
     }
 
@@ -353,4 +372,128 @@ async def import_trades(file: UploadFile = File(...), db: Session = Depends(get_
     return {
         "successful_count": successful_count,
         "errors": errors
+    }
+
+# Returns every trade where the review date has passed but it hasn't
+# been graded yet (outcome_tag still null) - these are "due for review."
+@app.get("/thesis-reviews")
+def get_thesis_reviews(db: Session = Depends(get_db)):
+    today = date.today()
+    due_trades = db.query(Trade).filter(
+        Trade.review_date <= today,
+        Trade.outcome_tag.is_(None)
+    ).all()
+
+    reviews = []
+    for trade in due_trades:
+        reviews.append({
+            "id": trade.id,
+            "ticker": trade.ticker,
+            "action": trade.action,
+            "thesis_text": trade.thesis_text,
+            "conviction_score": trade.conviction_score,
+            "trade_date": trade.trade_date.isoformat(),
+            "review_date": trade.review_date.isoformat()
+        })
+
+    return {"reviews": reviews}
+
+
+# Defines what a valid outcome update must look like
+class OutcomeUpdate(BaseModel):
+    outcome_tag: str  # expected: "correct", "incorrect", or "mixed"
+
+
+# Updates one specific trade's outcome_tag. Once set, that trade stops
+# showing up in GET /thesis-reviews above.
+@app.patch("/trades/{trade_id}/outcome") #PATCH HTTP method updates something existing
+def update_trade_outcome(trade_id: int, update: OutcomeUpdate, db: Session = Depends(get_db)):
+    trade = db.query(Trade).filter(Trade.id == trade_id).first()
+
+    if not trade:
+        raise HTTPException(status_code=404, detail=f"Trade with id {trade_id} not found")
+
+    trade.outcome_tag = update.outcome_tag
+    db.commit()
+
+    return {"success": True, "id": trade_id, "outcome_tag": trade.outcome_tag}
+
+# Pulls recent news headlines via yfinance, sends them to Claude for a
+# single overall sentiment classification, and returns exactly one of:
+# "positive", "neutral", "negative".
+@app.get("/sentiment/{ticker}") 
+def get_sentiment(ticker: str, db: Session = Depends(get_db)):
+    ticker = ticker.upper()  # normalize, same habit as our other stock routes
+
+    # Ask yfinance for recent news articles about this ticker.
+    # stock.news is a DIFFERENT dataset than stock.info - this one returns
+    # a list of news article dictionaries, not price/fundamentals data.
+    try:
+        stock = yf.Ticker(ticker)
+        news_items = stock.news
+    except Exception as e:
+        print(f"yfinance news fetch failed for {ticker}: {e}")
+        raise HTTPException(status_code=404, detail=f"Could not fetch news for ticker '{ticker}'")
+
+    # Even if the fetch didn't crash, there might just be no news at all
+    # for this ticker - "not news_items" catches both None and an empty list []
+    if not news_items:
+        raise HTTPException(status_code=404, detail=f"No news available for ticker '{ticker}'")
+
+    # Extract just the headline/title text from each news item.
+    headlines = []
+    for item in news_items[:5]:  # [:5] = "slicing" - only take the first 5 items
+        # yfinance's news structure isn't always consistent - sometimes the
+        # title is nested inside a "content" dict, sometimes it's at the top
+        # level. Try the nested version first; if that's empty/missing,
+        # "or" falls back to trying the flat version instead.
+        title = item.get("content", {}).get("title") or item.get("title")
+        if title:  # only keep it if we actually found a real title
+            headlines.append(title)
+
+    # It's possible news_items had entries, but none of them had a usable
+    # title after our extraction attempts - guard against that too
+    if not headlines:
+        raise HTTPException(status_code=404, detail=f"No usable headlines found for ticker '{ticker}'")
+
+    # Build the actual prompt text to send to Claude.
+    # The tricky part: chr(10).join(f"- {h}" for h in headlines)
+    #   - f"- {h}" for h in headlines  -> turns each headline into "- headline text"
+    #   - chr(10) is just a newline character (same as writing "\n")
+    #   - .join(...) glues all those bulleted lines together, one per line
+    # End result: a clean bulleted list of headlines, like:
+    #   - Apple announces new AI chip
+    #   - iPhone sales beat expectations
+    prompt = f"""Here are recent headlines about {ticker} stock:
+
+{chr(10).join(f"- {h}" for h in headlines)}
+
+Based on these headlines, classify the overall sentiment as exactly one word:
+"positive", "neutral", or "negative". Respond with only that one word, nothing else."""
+
+    # Send the prompt to Claude. max_tokens=10 is intentionally small since
+    # we only expect a single word back, not a full explanation.
+    try:
+        message = claude_client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=10,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        # .strip() removes accidental leading/trailing spaces,
+        # .lower() normalizes casing so "Positive" and "positive" match the same way
+        sentiment = message.content[0].text.strip().lower()
+    except Exception as e:
+        print(f"Claude API call failed for {ticker} sentiment: {e}")
+        raise HTTPException(status_code=404, detail="Could not generate sentiment analysis")
+
+    # Safety net: even with strict instructions, an LLM might occasionally
+    # return something unexpected (extra punctuation, a synonym, etc).
+    # If it's not exactly one of our three expected values, default to
+    # "neutral" instead of sending the frontend something it can't handle.
+    if sentiment not in ("positive", "neutral", "negative"):
+        sentiment = "neutral"
+
+    return {
+        "ticker": ticker,
+        "sentiment": sentiment
     }
