@@ -13,6 +13,8 @@ function HoldingsTable({ refreshKey }) {
   // Holds an error message if the fetch fails, or null if everything's fine.
   const [error, setError] = useState(null)
 
+  const [view, setView] = useState("all-time") // "all-time" or "today" — today comes in a later step
+
   useEffect(() => {
     setLoading(true)
     fetch("http://127.0.0.1:8000/holdings")
@@ -42,6 +44,12 @@ function HoldingsTable({ refreshKey }) {
   }
 
 const overweightHoldings = holdings.filter(h => h.overweight_flag)
+
+function calculateGainLoss(h) {
+  const gainLoss = (h.current_price - h.avg_cost) * h.shares
+  const gainLossPercent = ((h.current_price - h.avg_cost) / h.avg_cost) * 100
+  return { gainLoss, gainLossPercent }
+}
   
   // Only reached once loading is done, there's no error, AND holdings has data.
   return (
@@ -74,6 +82,23 @@ const overweightHoldings = holdings.filter(h => h.overweight_flag)
              </div>
             )}
 
+            <div style={{ marginBottom: "0.75rem" }}>
+  <button
+    onClick={() => setView("all-time")}
+    style={{ fontWeight: view === "all-time" ? "bold" : "normal" }}
+  >
+    All-time
+  </button>
+  <button
+    onClick={() => setView("today")}
+    style={{ fontWeight: view === "today" ? "bold" : "normal" }}
+  >
+    Today
+  </button>
+</div>
+
+
+
     <table className="holdings-table">
       <thead>
         <tr>
@@ -81,23 +106,31 @@ const overweightHoldings = holdings.filter(h => h.overweight_flag)
           <th>Shares</th>
           <th>Avg Cost</th>
           <th>Current Price</th>
+          <th>Gain/Loss</th>
           <th>Value</th>
           <th>% of Portfolio</th>
           <th>Sentiment</th>
         </tr>
       </thead>
       <tbody>
-        {holdings.map((h) => (
+        {holdings.map((h) => {
+          const { gainLoss, gainLossPercent } = calculateGainLoss(h)
+          return (
           <tr key={h.ticker} style={h.overweight_flag ? { color: "red" } : {}}>
             <td>{h.ticker}</td>
             <td>{h.shares}</td>
             <td>${h.avg_cost.toFixed(2)}</td>
             <td>${h.current_price.toFixed(2)}</td>
+            <td style={{ color: gainLoss >= 0 ? "green" : "red" }}>
+              {view === "all-time"
+                ? `${gainLoss >= 0 ? "+" : ""}$${gainLoss.toFixed(2)} (${gainLossPercent.toFixed(1)}%)`
+                : "Today's data not available yet"}
+            </td>
             <td>${h.value.toFixed(2)}</td>
             <td>{h.percentage.toFixed(1)}%</td>
             <td><SentimentBadge ticker={h.ticker} /></td>
           </tr>
-        ))}
+        )})}
       </tbody>
     </table>
     <div style={{ marginTop: "1.5rem" }}>
