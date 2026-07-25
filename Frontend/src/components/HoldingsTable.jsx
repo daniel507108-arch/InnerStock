@@ -79,6 +79,7 @@ const overweightHoldings = holdings.filter(h => h.overweight_flag)
         <tr>
           <th>Ticker</th>
           <th>Shares</th>
+          <th>Avg Cost</th>
           <th>Current Price</th>
           <th>Value</th>
           <th>% of Portfolio</th>
@@ -90,6 +91,7 @@ const overweightHoldings = holdings.filter(h => h.overweight_flag)
           <tr key={h.ticker} style={h.overweight_flag ? { color: "red" } : {}}>
             <td>{h.ticker}</td>
             <td>{h.shares}</td>
+            <td>${h.avg_cost.toFixed(2)}</td>
             <td>${h.current_price.toFixed(2)}</td>
             <td>${h.value.toFixed(2)}</td>
             <td>{h.percentage.toFixed(1)}%</td>
