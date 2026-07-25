@@ -57,6 +57,9 @@ function ThesisReview() {
           <strong>{r.ticker}</strong> — {r.action} on {r.trade_date}
           <p style={{ fontStyle: "italic" }}>"{r.thesis_text}"</p>
           <p>Conviction at the time: {r.conviction_score}/5</p>
+{r.fomo_flag && (
+  <p style={{ color: "orange", fontSize: "0.85rem" }}>⚡ This entry followed a sharp price run-up — possible FOMO buy</p>
+)}
 
           <button disabled={submittingId === r.id} onClick={() => handleOutcome(r.id, "correct")}>
             Correct

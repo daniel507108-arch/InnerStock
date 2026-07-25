@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react"
 import SentimentBadge from "./SentimentBadge"
+import BullBearPanel from "./BullBearPanel"
 
 function HoldingsTable({ refreshKey }) {
   // Starts as an empty array — there's nothing to show before the fetch finishes.
@@ -97,6 +98,15 @@ const overweightHoldings = holdings.filter(h => h.overweight_flag)
         ))}
       </tbody>
     </table>
+    <div style={{ marginTop: "1.5rem" }}>
+  <p style={{ fontWeight: "bold" }}>AI analysis</p>
+  {holdings.map((h) => (
+    <div key={h.ticker} style={{ marginBottom: "0.5rem" }}>
+      <span style={{ fontWeight: "bold" }}>{h.ticker}</span>
+      <BullBearPanel ticker={h.ticker} />
+    </div>
+  ))}
+</div>
   </div>
 )
 }
