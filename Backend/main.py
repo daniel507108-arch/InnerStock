@@ -254,17 +254,16 @@ def get_holdings(db: Session = Depends(get_db)):
 # ticker, based on data we already have cached (no new yfinance call needed).
 @app.get("/bullbear/{ticker}")
 def get_bull_bear(ticker: str, db: Session = Depends(get_db)):
-    ticker = ticker.upper()  # normalize so "aapl" and "AAPL" match the same cache row
+    ticker = ticker.upper()
 
-    # Look up this ticker's cached price data - we'll use it as context for Claude
-    cached = db.query(PriceCache).filter(PriceCache.ticker == ticker).first()
+    # Reuse the same helper /holdings uses - checks the cache first, and
+    # automatically fetches fresh data from yfinance if it's missing or stale,
+    # instead of just giving up when nothing's cached yet.
+    cached = get_or_fetch_price(ticker, db)
 
-    # If we've never cached this ticker, there's no data to base the analysis on
     if not cached:
-        return {"error": "No cached data for this ticker yet - visit /stock/{ticker} first"}
+        raise HTTPException(status_code=404, detail=f"Ticker '{ticker}' not found or has no price data")
 
-    # Build the actual prompt we'll send to Claude, injecting real cached
-    # data directly into the text so the response is grounded in real numbers
     prompt = f"""Give a brief bull case, bear case, and key risk for {ticker} stock.
 Current price: {cached.current_price}
 Sector: {cached.sector}
@@ -276,16 +275,16 @@ Bull Case: [1-2 sentences]
 Bear Case: [1-2 sentences]
 Key Risk: [1 sentence]"""
 
-    # Send the prompt to Claude and wait for a response.
-    # max_tokens caps how long the reply can be, keeping it short and cheap.
-    message = claude_client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=300,
-        messages=[{"role": "user", "content": prompt}]
-    )
+    try:
+        message = claude_client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}]
+        )
+    except Exception as e:
+        print(f"Claude API call failed for {ticker} bull/bear: {e}")
+        raise HTTPException(status_code=404, detail="Could not generate bull/bear analysis")
 
-    # Claude's reply comes back as a list of content blocks - [0].text
-    # grabs just the plain text of the first (and only) block here
     return {
         "ticker": ticker,
         "analysis": message.content[0].text
@@ -435,65 +434,63 @@ def get_sentiment(ticker: str, db: Session = Depends(get_db)):
         print(f"yfinance news fetch failed for {ticker}: {e}")
         raise HTTPException(status_code=404, detail=f"Could not fetch news for ticker '{ticker}'")
 
-    # Even if the fetch didn't crash, there might just be no news at all
-    # for this ticker - "not news_items" catches both None and an empty list []
     if not news_items:
         raise HTTPException(status_code=404, detail=f"No news available for ticker '{ticker}'")
 
-    # Extract just the headline/title text from each news item.
     headlines = []
-    for item in news_items[:5]:  # [:5] = "slicing" - only take the first 5 items
-        # yfinance's news structure isn't always consistent - sometimes the
-        # title is nested inside a "content" dict, sometimes it's at the top
-        # level. Try the nested version first; if that's empty/missing,
-        # "or" falls back to trying the flat version instead.
+    for item in news_items[:5]: #First 5 headlines
         title = item.get("content", {}).get("title") or item.get("title")
-        if title:  # only keep it if we actually found a real title
+        if title:
             headlines.append(title)
 
-    # It's possible news_items had entries, but none of them had a usable
-    # title after our extraction attempts - guard against that too
     if not headlines:
         raise HTTPException(status_code=404, detail=f"No usable headlines found for ticker '{ticker}'")
 
-    # Build the actual prompt text to send to Claude.
-    # The tricky part: chr(10).join(f"- {h}" for h in headlines)
-    #   - f"- {h}" for h in headlines  -> turns each headline into "- headline text"
-    #   - chr(10) is just a newline character (same as writing "\n")
-    #   - .join(...) glues all those bulleted lines together, one per line
+    prompt = f"""Here are recent headlines about {ticker} stock:
+
     # End result: a clean bulleted list of headlines, like:
     #   - Apple announces new AI chip
     #   - iPhone sales beat expectations
-    prompt = f"""Here are recent headlines about {ticker} stock:
-
 {chr(10).join(f"- {h}" for h in headlines)}
 
-Based on these headlines, classify the overall sentiment as exactly one word:
-"positive", "neutral", or "negative". Respond with only that one word, nothing else."""
+Respond in exactly this two-line format, nothing else:
+SENTIMENT: [positive/neutral/negative]
+SUMMARY: [two sentences explaining why, based on the headlines]"""
 
-    # Send the prompt to Claude. max_tokens=10 is intentionally small since
-    # we only expect a single word back, not a full explanation.
+    # max_tokens bumped up from 10 to 150 - we now need room for a full
+    # two-sentence summary, not just a single word
     try:
         message = claude_client.messages.create(
             model="claude-sonnet-4-6",
-            max_tokens=10,
+            max_tokens=150,
             messages=[{"role": "user", "content": prompt}]
         )
-        # .strip() removes accidental leading/trailing spaces,
-        # .lower() normalizes casing so "Positive" and "positive" match the same way
-        sentiment = message.content[0].text.strip().lower()
+        raw_response = message.content[0].text.strip()
     except Exception as e:
         print(f"Claude API call failed for {ticker} sentiment: {e}")
         raise HTTPException(status_code=404, detail="Could not generate sentiment analysis")
 
-    # Safety net: even with strict instructions, an LLM might occasionally
-    # return something unexpected (extra punctuation, a synonym, etc).
-    # If it's not exactly one of our three expected values, default to
-    # "neutral" instead of sending the frontend something it can't handle.
+    # Set defaults first, in case parsing below doesn't find one or both labels
+    sentiment = "neutral"
+    summary = "No summary available."
+
+    # Split Claude's reply into individual lines and look for our two labels
+    for line in raw_response.split("\n"):
+        line = line.strip()
+        if line.upper().startswith("SENTIMENT:"):
+            # split(":", 1) only splits on the FIRST colon - so if the
+            # summary line happens to contain a colon, it won't get cut wrong
+            sentiment = line.split(":", 1)[1].strip().lower()
+        elif line.upper().startswith("SUMMARY:"):
+            summary = line.split(":", 1)[1].strip()
+
+    # Safety net: if what we parsed isn't exactly one of the three expected
+    # values, default to "neutral" instead of returning something unexpected
     if sentiment not in ("positive", "neutral", "negative"):
         sentiment = "neutral"
 
     return {
         "ticker": ticker,
-        "sentiment": sentiment
+        "sentiment": sentiment,
+        "summary": summary
     }
