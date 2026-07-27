@@ -38,9 +38,7 @@ function BullBearPanel({ ticker }) {
 
       {expanded && data && (
         <div style={{ border: "1px solid #333", borderRadius: "6px", padding: "0.75rem", marginTop: "0.5rem" }}>
-          <p><strong>Bull case:</strong> {data.bull_case}</p>
-          <p><strong>Bear case:</strong> {data.bear_case}</p>
-          <p><strong>Key risks:</strong> {data.key_risks}</p>
+          {data.analysis}
         </div>
       )}
     </div>
