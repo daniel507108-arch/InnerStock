@@ -107,12 +107,14 @@ def get_or_fetch_price(ticker: str, db: Session):
     if price is None:
         return cached  # invalid ticker or no data - same fallback
 
+    previous_close = info.get("previousClose")
     market_cap = info.get("marketCap")
     pe_ratio = info.get("trailingPE")
     sector = info.get("sector")
 
     if cached:
         cached.current_price = price
+        cached.previous_close = previous_close
         cached.market_cap = market_cap
         cached.pe_ratio = pe_ratio
         cached.sector = sector
@@ -121,6 +123,7 @@ def get_or_fetch_price(ticker: str, db: Session):
         cached = PriceCache(
             ticker=ticker,
             current_price=price,
+            previous_close=previous_close,
             market_cap=market_cap,
             pe_ratio=pe_ratio,
             sector=sector,
@@ -217,6 +220,13 @@ def get_holdings(db: Session = Depends(get_db)):
     for ticker, shares in holdings.items():
         cached = get_or_fetch_price(ticker, db)
         current_price = float(cached.current_price) if cached else 0
+
+        # NEW: yesterday's closing price, used for "today's" gain/loss below.
+        # Falls back to current_price if we don't have a previous_close yet
+        # (e.g. right after adding this column, before every ticker's been
+        # re-fetched) so the math doesn't crash or produce a huge fake number.
+        previous_close = float(cached.previous_close) if cached and cached.previous_close else current_price
+
         value = shares * current_price
         total_value += value
 
@@ -227,12 +237,28 @@ def get_holdings(db: Session = Depends(get_db)):
         else:
             avg_cost = 0  # shouldn't normally happen, but guards against divide-by-zero
 
+        # NEW: all-time gain/loss - compares current price to what you paid
+        # on average, across the whole time you've held this position
+        total_gain_loss = (current_price - avg_cost) * shares
+        total_gain_loss_percent = ((current_price - avg_cost) / avg_cost * 100) if avg_cost > 0 else 0
+
+        # NEW: today's gain/loss - compares current price to yesterday's
+        # close, regardless of when you actually bought in. This is what
+        # lets the frontend toggle between "today" and "all-time" views
+        # without needing a second API call - both numbers are always here.
+        day_gain_loss = (current_price - previous_close) * shares
+        day_gain_loss_percent = ((current_price - previous_close) / previous_close * 100) if previous_close > 0 else 0
+
         holdings_list.append({
             "ticker": ticker,
             "shares": shares,
             "current_price": current_price,
             "avg_cost": round(avg_cost, 2),
-            "value": value
+            "value": value,
+            "total_gain_loss": round(total_gain_loss, 2),
+            "total_gain_loss_percent": round(total_gain_loss_percent, 2),
+            "day_gain_loss": round(day_gain_loss, 2),
+            "day_gain_loss_percent": round(day_gain_loss_percent, 2)
         })
 
     # Step 4: now that total_value is known, calculate each holding's % share

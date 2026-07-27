@@ -32,6 +32,7 @@ class PriceCache(Base):
 
     ticker = Column(String, primary_key=True)
     current_price = Column(Numeric, nullable=False)
+    previous_close = Column(Numeric, nullable=True)
     market_cap = Column(Numeric, nullable=True)
     pe_ratio = Column(Numeric, nullable=True)
     sector = Column(String, nullable=True)
