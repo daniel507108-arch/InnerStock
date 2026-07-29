@@ -107,12 +107,14 @@ def get_or_fetch_price(ticker: str, db: Session):
     if price is None:
         return cached  # invalid ticker or no data - same fallback
 
+    previous_close = info.get("previousClose")
     market_cap = info.get("marketCap")
     pe_ratio = info.get("trailingPE")
     sector = info.get("sector")
 
     if cached:
         cached.current_price = price
+        cached.previous_close = previous_close
         cached.market_cap = market_cap
         cached.pe_ratio = pe_ratio
         cached.sector = sector
@@ -121,6 +123,7 @@ def get_or_fetch_price(ticker: str, db: Session):
         cached = PriceCache(
             ticker=ticker,
             current_price=price,
+            previous_close=previous_close,
             market_cap=market_cap,
             pe_ratio=pe_ratio,
             sector=sector,
@@ -217,6 +220,13 @@ def get_holdings(db: Session = Depends(get_db)):
     for ticker, shares in holdings.items():
         cached = get_or_fetch_price(ticker, db)
         current_price = float(cached.current_price) if cached else 0
+
+        # NEW: yesterday's closing price, used for "today's" gain/loss below.
+        # Falls back to current_price if we don't have a previous_close yet
+        # (e.g. right after adding this column, before every ticker's been
+        # re-fetched) so the math doesn't crash or produce a huge fake number.
+        previous_close = float(cached.previous_close) if cached and cached.previous_close else current_price
+
         value = shares * current_price
         total_value += value
 
@@ -227,12 +237,28 @@ def get_holdings(db: Session = Depends(get_db)):
         else:
             avg_cost = 0  # shouldn't normally happen, but guards against divide-by-zero
 
+        # NEW: all-time gain/loss - compares current price to what you paid
+        # on average, across the whole time you've held this position
+        total_gain_loss = (current_price - avg_cost) * shares
+        total_gain_loss_percent = ((current_price - avg_cost) / avg_cost * 100) if avg_cost > 0 else 0
+
+        # NEW: today's gain/loss - compares current price to yesterday's
+        # close, regardless of when you actually bought in. This is what
+        # lets the frontend toggle between "today" and "all-time" views
+        # without needing a second API call - both numbers are always here.
+        day_gain_loss = (current_price - previous_close) * shares
+        day_gain_loss_percent = ((current_price - previous_close) / previous_close * 100) if previous_close > 0 else 0
+
         holdings_list.append({
             "ticker": ticker,
             "shares": shares,
             "current_price": current_price,
             "avg_cost": round(avg_cost, 2),
-            "value": value
+            "value": value,
+            "total_gain_loss": round(total_gain_loss, 2),
+            "total_gain_loss_percent": round(total_gain_loss_percent, 2),
+            "day_gain_loss": round(day_gain_loss, 2),
+            "day_gain_loss_percent": round(day_gain_loss_percent, 2)
         })
 
     # Step 4: now that total_value is known, calculate each holding's % share
@@ -493,4 +519,82 @@ SUMMARY: [two sentences explaining why, based on the headlines]"""
         "ticker": ticker,
         "sentiment": sentiment,
         "summary": summary
+    }
+
+# Checks whether a trade was made shortly after a sharp price run-up -
+# a proxy for an emotionally-driven ("FOMO") entry rather than one
+# based on careful research, per the original product thesis.
+@app.get("/fomo-check/{trade_id}")
+def check_fomo(trade_id: int, db: Session = Depends(get_db)):
+    trade = db.query(Trade).filter(Trade.id == trade_id).first()
+
+    if not trade:
+        raise HTTPException(status_code=404, detail=f"Trade with id {trade_id} not found")
+
+    # Only "buy" trades make sense to flag - selling into a rally isn't FOMO
+    if trade.action != "buy":
+        return {
+            "trade_id": trade_id,
+            "ticker": trade.ticker,
+            "fomo_flag": False,
+            "reason": "Only buy trades are checked for FOMO"
+        }
+
+    ticker = trade.ticker.upper()
+
+    # Look at the 5 trading days leading up to (and including) the trade date.
+    # Using 7 calendar days as the window to comfortably cover 5 trading
+    # days even with a weekend in between.
+    end_date = trade.trade_date
+    start_date = end_date - timedelta(days=7)
+
+    try:
+        stock = yf.Ticker(ticker)
+        history = stock.history(start=start_date.isoformat(), end=(end_date + timedelta(days=1)).isoformat())
+    except Exception as e:
+        print(f"yfinance history fetch failed for {ticker}: {e}")
+        raise HTTPException(status_code=404, detail=f"Could not fetch price history for '{ticker}'")
+
+    if history.empty or len(history) < 2:
+        return {
+            "trade_id": trade_id,
+            "ticker": ticker,
+            "fomo_flag": False,
+            "reason": "Not enough price history available to check"
+        }
+
+    # First and last closing prices in this window
+    price_before = history["Close"].iloc[0]
+    price_at_trade = history["Close"].iloc[-1]
+
+    percent_change = ((price_at_trade - price_before) / price_before) * 100
+
+    # Convert numpy types to plain Python types before using them further -
+    # yfinance/pandas returns numpy floats, which FastAPI can't reliably
+    # convert to JSON on their own (this is what caused the 500 error)
+    percent_change = float(percent_change)
+
+    # Flag significant moves in either direction - a sharp RISE right before
+    # buying suggests FOMO (chasing hype); a sharp DROP right before buying
+    # suggests "buying the dip." Both are worth surfacing, but we report
+    # which one it is so the label stays meaningful.
+    FOMO_THRESHOLD = 5.0
+    significant_move = bool(abs(percent_change) > FOMO_THRESHOLD)
+
+    if significant_move and percent_change > 0:
+        fomo_flag = True
+        reason = f"Stock rose {round(percent_change, 2)}% in the days before this trade - possible FOMO entry"
+    elif significant_move and percent_change < 0:
+        fomo_flag = True
+        reason = f"Stock dropped {round(percent_change, 2)}% in the days before this trade - possible 'buying the dip'"
+    else:
+        fomo_flag = False
+        reason = "No significant price move detected before this trade"
+
+    return {
+        "trade_id": trade_id,
+        "ticker": ticker,
+        "price_change_percent": round(percent_change, 2),
+        "fomo_flag": fomo_flag,
+        "reason": reason
     }
