@@ -56,17 +56,13 @@ function calculateGainLoss(h) {
   <div>
     <style>{`
       .holdings-table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
-      .holdings-table th, .holdings-table td { padding: 0.5rem 1rem; text-align: left; border-bottom: 1px solid #333; }
-      .holdings-table th { background: #1a1a1a; }
-      .holdings-table tbody tr:nth-child(even) { background: #111; }
-      .concentration-alert { background: #3a1a1a; border: 1px solid #cc4444; color: #ffb3b3; padding: 0.75rem 1rem; border-radius: 6px; margin-bottom: 1rem; }
-      .concentration-alert ul { margin: 0.5rem 0 0 1.25rem; }
-      .sentiment-badge { padding: 0.15rem 0.5rem; border-radius: 12px; font-size: 0.8rem; text-transform: capitalize; }
-      .sentiment-positive { background: #1a3a1a; color: #8fd88f; }
-      .sentiment-negative { background: #3a1a1a; color: #ffb3b3; }
-      .sentiment-neutral { background: #2a2a2a; color: #aaa; }
-      .sentiment-loading { color: #666; }
-      .sentiment-unavailable { color: #555; }
+.holdings-table th, .holdings-table td { padding: 0.5rem 1rem; text-align: left; border-bottom: 1px solid var(--color-border); }
+.holdings-table th { background: var(--color-surface); color: var(--color-text-secondary); font-weight: 500; }
+.holdings-table tbody tr:nth-child(even) { background: var(--color-surface-alt); }
+.concentration-alert { background: var(--color-warning-bg); border: 1px solid var(--color-warning); color: var(--color-warning); padding: 0.75rem 1rem; border-radius: var(--radius-sm); margin-bottom: 1rem; }
+.sentiment-positive { background: var(--color-success-bg); color: var(--color-success); }
+.sentiment-negative { background: var(--color-danger-bg); color: var(--color-danger); }
+.sentiment-neutral { background: var(--color-surface); color: var(--color-text-secondary); }
     `}</style>
 
 {overweightHoldings.length > 0 && (
@@ -116,12 +112,12 @@ function calculateGainLoss(h) {
         {holdings.map((h) => {
           const { gainLoss, gainLossPercent } = calculateGainLoss(h)
           return (
-          <tr key={h.ticker} style={h.overweight_flag ? { color: "red" } : {}}>
+          <tr key={h.ticker} style={h.overweight_flag ? { color: "var(--color-danger)" } : {}}>
             <td>{h.ticker}</td>
             <td>{h.shares}</td>
             <td>${h.avg_cost.toFixed(2)}</td>
             <td>${h.current_price.toFixed(2)}</td>
-            <td style={{ color: gainLoss >= 0 ? "green" : "red" }}>
+            <td style={{ color: gainLoss >= 0 ? "var(--color-success)" : "var(--color-danger)" }}>
               {view === "all-time"
                 ? `${gainLoss >= 0 ? "+" : ""}$${gainLoss.toFixed(2)} (${gainLossPercent.toFixed(1)}%)`
                 : "Today's data not available yet"}
