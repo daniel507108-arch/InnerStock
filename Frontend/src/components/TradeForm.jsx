@@ -80,7 +80,7 @@ function TradeForm({ onTradeLogged }) {
       setErrorMessage(err.message)
     }
   }
-  const labelStyle = { display: "flex", flexDirection: "column", gap: "0.25rem", fontSize: "0.9rem" }
+ const labelStyle = { display: "flex", flexDirection: "column", gap: "0.25rem", fontSize: "0.9rem", color: "var(--color-text-secondary)" }
 
 async function handleTickerBlur() {
   // Don't bother if there's no ticker typed, or if the user already
@@ -102,7 +102,7 @@ async function handleTickerBlur() {
 }
 
  return (
-  <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "0.5rem", maxWidth: "300px" }}>
+  <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "0.5rem", maxWidth: "320px", background: "var(--color-surface)", padding: "16px", borderRadius: "var(--radius-md)" }}>
     <label style={labelStyle}>
       Ticker
       <input name="ticker" value={form.ticker} onChange={(e) => setForm((prev) => ({ ...prev, ticker: e.target.value.toUpperCase() }))} onBlur={handleTickerBlur} placeholder="e.g. AAPL"
@@ -149,8 +149,8 @@ async function handleTickerBlur() {
 
     <button type="submit">Log Trade</button>
 
-    {status === "success" && <p style={{ color: "green" }}>Trade logged successfully.</p>}
-    {status === "error" && <p style={{ color: "red" }}>{errorMessage}</p>}
+    {status === "success" && <p style={{ color: "var(--color-success)" }}>Trade logged successfully.</p>}
+    {status === "error" && <p style={{ color: "var(--color-danger)" }}>{errorMessage}</p>}
   </form>
 )
 }
