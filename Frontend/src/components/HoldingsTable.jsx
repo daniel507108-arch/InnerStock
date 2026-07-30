@@ -75,6 +75,9 @@ function HoldingsTable({ refreshKey }) {
         .sentiment-neutral { background: var(--color-surface); color: var(--color-text-secondary); }
         .sentiment-loading { color: var(--color-text-secondary); }
         .sentiment-unavailable { color: var(--color-text-secondary); }
+        .sentiment-loading { color: var(--color-text-muted); }
+        .sentiment-unavailable { color: var(--color-text-muted); }
+        .sentiment-badge { padding: 0.2rem 0.65rem; border-radius: 999px; font-size: 0.8rem; text-transform: capitalize; display: inline-block; }
       `}</style>
 
       {/* Only shown at all if at least one holding is flagged overweight */}

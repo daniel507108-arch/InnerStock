@@ -30,17 +30,28 @@ function BullBearPanel({ ticker }) {
 
   return (
     <div style={{ marginTop: "0.4rem" }}>
-      <button onClick={handleToggle} disabled={loading}>
-        {loading ? "Loading..." : expanded ? "Hide AI analysis" : "View AI analysis"}
-      </button>
+      <button
+  onClick={handleToggle}
+  disabled={loading}
+  style={{ borderColor: "var(--color-border-strong)", color: "var(--color-text-primary)" }}
+>
+  {loading ? "Loading..." : expanded ? "Hide AI analysis" : "View AI analysis"}
+</button>
 
-      {error && <p style={{ color: "red", fontSize: "0.85rem" }}>{error}</p>}
+      {error && <p style={{ color: "var(--color-danger)", fontSize: "0.85rem" }}>{error}</p>}
 
-      {expanded && data && (
-        <div style={{ border: "1px solid #333", borderRadius: "6px", padding: "0.75rem", marginTop: "0.5rem" }}>
-          {data.analysis}
-        </div>
-      )}
+     {expanded && data && (
+  <div style={{ border: "1px solid var(--color-border)", borderRadius: "var(--radius-sm)", padding: "0.85rem", marginTop: "0.5rem", background: "var(--color-surface-alt)" }}>
+    {data.analysis.split(/(?=Bull Case:|Bear Case:|Key Risk:)/).map((section, i) => {
+      const [label, ...rest] = section.split(":")
+      return (
+        <p key={i} style={{ marginBottom: "0.6rem", color: "var(--color-text-primary)" }}>
+          <strong>{label}:</strong>{rest.join(":").trim()}
+        </p>
+      )
+    })}
+  </div>
+)}
     </div>
   )
 }
