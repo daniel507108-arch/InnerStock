@@ -41,10 +41,22 @@ function CsvUpload({ onTradeLogged }) {
   }
 
   return (
-    <div style={{ marginTop: "1rem", background: "var(--color-surface)", padding: "16px", borderRadius: "var(--radius-md)" }}>
-      <h3 style={{ marginTop: 0, color: "var(--color-text-primary)" }}>Import trades from CSV</h3>
+    <div style={{ background: "var(--color-surface)", padding: "var(--space-md)", borderRadius: "var(--radius-md)" }}>
+      <h3 style={{ marginTop: 0, fontSize: "var(--text-lg)", fontWeight: "var(--font-weight-medium)", color: "var(--color-text-primary)" }}>Import trades from CSV</h3>
       <input type="file" accept=".csv" onChange={handleFileChange} />
-      <button onClick={handleUpload}>Import CSV</button>
+      <button
+        onClick={handleUpload}
+       style={{
+        background: "transparent",
+        color: "var(--color-text-primary)",
+        border: "1px solid var(--color-border-strong)",
+        borderRadius: "var(--radius-sm)",
+        padding: "0.5rem 1rem",
+        cursor: "pointer",
+      }}
+    >
+      Import CSV
+    </button>
 
       {results && (
         <div style={{ marginTop: "1rem" }}>

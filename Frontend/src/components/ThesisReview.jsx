@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react"
+import { IconBolt } from "@tabler/icons-react"
 
 function ThesisReview() {
   const [reviews, setReviews] = useState([])
@@ -51,26 +52,38 @@ if (reviews.length === 0) return <p style={{ color: "var(--color-text-secondary)
 
   return (
     <div style={{ background: "var(--color-surface)", padding: "16px", borderRadius: "var(--radius-md)" }}>
-      <h3 style={{ marginTop: 0, color: "var(--color-text-primary)" }}>Thesis review</h3>
+      <h3 style={{ marginTop: 0, fontSize: "var(--text-lg)", fontWeight: "var(--font-weight-medium)", color: "var(--color-text-primary)" }}>Thesis Review</h3>
       {reviews.map((r) => (
-        <div key={r.id} style={{ border: "1px solid var(--color-border)", borderRadius: "var(--radius-sm)", padding: "1rem", marginBottom: "1rem", background: "var(--color-surface-alt)" }}>
-          <strong style={{ color: "var(--color-text-primary)" }}>{r.ticker}</strong>
-          <span style={{ color: "var(--color-text-secondary)" }}> — {r.action} on {r.trade_date}</span>
+        <div key={r.id} style={{ border: "1px solid var(--color-border)", borderRadius: "var(--radius-sm)", padding: "var(--space-md)", marginBottom: "var(--space-md)", background: "var(--color-surface-alt)" }}>
+          <strong style={{ color: "var(--color-text-primary)", fontWeight: "var(--font-weight-medium)" }}>{r.ticker}</strong>
+          <span style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-sm)" }}> — {r.action} on {r.trade_date}</span>
           <p style={{ fontStyle: "italic", color: "var(--color-text-primary)" }}>"{r.thesis_text}"</p>
-          <p style={{ color: "var(--color-text-secondary)" }}>Conviction at the time: {r.conviction_score}/5</p>
+          <p style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-sm)" }}>Conviction at the time: {r.conviction_score}/5</p>
           {r.fomo_flag && (
-  <p style={{ color: "var(--color-warning)", fontSize: "0.85rem" }}>⚡ This entry followed a sharp price run-up — possible FOMO buy</p>
+  <p style={{ color: "var(--color-warning)", fontSize: "var(--text-sm)", display: "flex", alignItems: "center", gap: "6px" }}>
+  <IconBolt size={15} /> This entry followed a sharp price run-up — possible FOMO buy
+</p>
 )}
 
-          <button disabled={submittingId === r.id} onClick={() => handleOutcome(r.id, "correct")}>
-            Correct
-          </button>
-          <button disabled={submittingId === r.id} onClick={() => handleOutcome(r.id, "incorrect")}>
-            Incorrect
-          </button>
-          <button disabled={submittingId === r.id} onClick={() => handleOutcome(r.id, "mixed")}>
-            Mixed
-          </button>
+          {["correct", "incorrect", "mixed"].map((outcome) => (
+  <button
+    key={outcome}
+    disabled={submittingId === r.id}
+    onClick={() => handleOutcome(r.id, outcome)}
+    style={{
+      background: "transparent",
+      color: "var(--color-text-primary)",
+      border: "1px solid var(--color-border-strong)",
+      borderRadius: "var(--radius-sm)",
+      padding: "0.4rem 0.8rem",
+      marginRight: "0.5rem",
+      cursor: submittingId === r.id ? "default" : "pointer",
+      opacity: submittingId === r.id ? 0.5 : 1,
+    }}
+  >
+    {outcome.charAt(0).toUpperCase() + outcome.slice(1)}
+  </button>
+))}
         </div>
       ))}
     </div>

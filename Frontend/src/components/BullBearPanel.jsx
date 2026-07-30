@@ -33,12 +33,19 @@ function BullBearPanel({ ticker }) {
       <button
   onClick={handleToggle}
   disabled={loading}
-  style={{ borderColor: "var(--color-border-strong)", color: "var(--color-text-primary)" }}
+  style={{
+    background: "transparent",
+    color: "var(--color-text-primary)",
+    border: "1px solid var(--color-border-strong)",
+    borderRadius: "var(--radius-sm)",
+    padding: "0.4rem 0.8rem",
+    cursor: loading ? "default" : "pointer",
+  }}
 >
   {loading ? "Loading..." : expanded ? "Hide AI analysis" : "View AI analysis"}
 </button>
 
-      {error && <p style={{ color: "var(--color-danger)", fontSize: "0.85rem" }}>{error}</p>}
+      {error && <p style={{ color: "var(--color-danger)", fontSize: "var(--text-sm)" }}>{error}</p>}
 
      {expanded && data && (
   <div style={{ border: "1px solid var(--color-border)", borderRadius: "var(--radius-sm)", padding: "0.85rem", marginTop: "0.5rem", background: "var(--color-surface-alt)" }}>
