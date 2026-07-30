@@ -45,20 +45,21 @@ function ThesisReview() {
     }
   }
 
-  if (loading) return <p>Loading thesis reviews...</p>
-  if (error) return <p style={{ color: "red" }}>Thesis review unavailable: {error}</p>
-  if (reviews.length === 0) return <p>Nothing due for review yet.</p>
+  if (loading) return <p style={{ color: "var(--color-text-secondary)" }}>Loading thesis reviews...</p>
+if (error) return <p style={{ color: "var(--color-danger)" }}>Thesis review unavailable: {error}</p>
+if (reviews.length === 0) return <p style={{ color: "var(--color-text-secondary)" }}>Nothing due for review yet.</p>
 
   return (
-    <div style={{ marginTop: "2rem" }}>
-      <h3>Thesis Review</h3>
+    <div style={{ background: "var(--color-surface)", padding: "16px", borderRadius: "var(--radius-md)" }}>
+      <h3 style={{ marginTop: 0, color: "var(--color-text-primary)" }}>Thesis review</h3>
       {reviews.map((r) => (
-        <div key={r.id} style={{ border: "1px solid #333", borderRadius: "6px", padding: "1rem", marginBottom: "1rem" }}>
-          <strong>{r.ticker}</strong> — {r.action} on {r.trade_date}
-          <p style={{ fontStyle: "italic" }}>"{r.thesis_text}"</p>
-          <p>Conviction at the time: {r.conviction_score}/5</p>
-{r.fomo_flag && (
-  <p style={{ color: "orange", fontSize: "0.85rem" }}>⚡ This entry followed a sharp price run-up — possible FOMO buy</p>
+        <div key={r.id} style={{ border: "1px solid var(--color-border)", borderRadius: "var(--radius-sm)", padding: "1rem", marginBottom: "1rem", background: "var(--color-surface-alt)" }}>
+          <strong style={{ color: "var(--color-text-primary)" }}>{r.ticker}</strong>
+          <span style={{ color: "var(--color-text-secondary)" }}> — {r.action} on {r.trade_date}</span>
+          <p style={{ fontStyle: "italic", color: "var(--color-text-primary)" }}>"{r.thesis_text}"</p>
+          <p style={{ color: "var(--color-text-secondary)" }}>Conviction at the time: {r.conviction_score}/5</p>
+          {r.fomo_flag && (
+  <p style={{ color: "var(--color-warning)", fontSize: "0.85rem" }}>⚡ This entry followed a sharp price run-up — possible FOMO buy</p>
 )}
 
           <button disabled={submittingId === r.id} onClick={() => handleOutcome(r.id, "correct")}>
