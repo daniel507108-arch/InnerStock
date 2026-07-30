@@ -73,8 +73,6 @@ function HoldingsTable({ refreshKey }) {
         .sentiment-positive { background: var(--color-success-bg); color: var(--color-success); }
         .sentiment-negative { background: var(--color-danger-bg); color: var(--color-danger); }
         .sentiment-neutral { background: var(--color-surface); color: var(--color-text-secondary); }
-        .sentiment-loading { color: var(--color-text-secondary); }
-        .sentiment-unavailable { color: var(--color-text-secondary); }
         .sentiment-loading { color: var(--color-text-muted); }
         .sentiment-unavailable { color: var(--color-text-muted); }
         .sentiment-badge { padding: 0.2rem 0.65rem; border-radius: 999px; font-size: 0.8rem; text-transform: capitalize; display: inline-block; }
@@ -126,11 +124,11 @@ function HoldingsTable({ refreshKey }) {
         <tbody>
           {holdings.map((h) => {
             // Frontend-calculated all-time values (see note on calculateGainLoss above)
-            const { gainLoss, gainLossPercent } = calculateGainLoss(h)
+            const activeGainLoss = view === "all-time" ? h.total_gain_loss : h.day_gain_loss
 
             // Whichever value is currently relevant, based on the toggle -
             // used for both the displayed text AND the color below
-            const activeGainLoss = view === "all-time" ? gainLoss : h.day_gain_loss
+            const activeGainLossPercent = view === "all-time" ? h.total_gain_loss_percent : h.day_gain_loss_percent
 
             return (
               <tr key={h.ticker} style={h.overweight_flag ? { color: "var(--color-danger)" } : {}}>
@@ -139,9 +137,7 @@ function HoldingsTable({ refreshKey }) {
                 <td>${h.avg_cost.toFixed(2)}</td>
                 <td>${h.current_price.toFixed(2)}</td>
                 <td style={{ color: activeGainLoss >= 0 ? "var(--color-success)" : "var(--color-danger)" }}>
-                  {view === "all-time"
-                    ? `${gainLoss >= 0 ? "+" : ""}$${gainLoss.toFixed(2)} (${gainLossPercent.toFixed(1)}%)`
-                    : `${h.day_gain_loss >= 0 ? "+" : ""}$${h.day_gain_loss.toFixed(2)} (${h.day_gain_loss_percent.toFixed(1)}%)`}
+                  {`${activeGainLoss >= 0 ? "+" : ""}$${activeGainLoss.toFixed(2)} (${activeGainLossPercent.toFixed(1)}%)`}
                 </td>
                 <td>${h.value.toFixed(2)}</td>
                 <td>{h.percentage.toFixed(1)}%</td>
