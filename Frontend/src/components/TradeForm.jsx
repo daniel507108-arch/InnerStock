@@ -80,7 +80,7 @@ function TradeForm({ onTradeLogged }) {
       setErrorMessage(err.message)
     }
   }
- const labelStyle = { display: "flex", flexDirection: "column", gap: "0.25rem", fontSize: "0.9rem", color: "var(--color-text-secondary)" }
+ const labelStyle = { display: "flex", flexDirection: "column", gap: "0.25rem", fontSize: "var(--text-sm)", color: "var(--color-text-secondary)" }
 
 async function handleTickerBlur() {
   // Don't bother if there's no ticker typed, or if the user already
@@ -102,7 +102,7 @@ async function handleTickerBlur() {
 }
 
  return (
-  <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "0.5rem", maxWidth: "320px", background: "var(--color-surface)", padding: "16px", borderRadius: "var(--radius-md)" }}>
+  <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "var(--space-xs)", maxWidth: "320px", background: "var(--color-surface)", padding: "var(--space-md)", borderRadius: "var(--radius-md)" }}>
     <label style={labelStyle}>
       Ticker
       <input name="ticker" value={form.ticker} onChange={(e) => setForm((prev) => ({ ...prev, ticker: e.target.value.toUpperCase() }))} onBlur={handleTickerBlur} placeholder="e.g. AAPL"
@@ -147,7 +147,20 @@ async function handleTickerBlur() {
       <input name="review_date" type="date" value={form.review_date} onChange={handleChange} />
     </label>
 
-    <button type="submit">Log Trade</button>
+    <button
+      type="submit"
+      style={{
+        background: "var(--color-fill-primary)",
+        color: "var(--color-on-primary)",
+        border: "none",
+        borderRadius: "var(--radius-sm)",
+        padding: "0.5rem",
+        fontWeight: 500,
+        cursor: "pointer",
+      }}
+  >
+    Log trade
+  </button>
 
     {status === "success" && <p style={{ color: "var(--color-success)" }}>Trade logged successfully.</p>}
     {status === "error" && <p style={{ color: "var(--color-danger)" }}>{errorMessage}</p>}

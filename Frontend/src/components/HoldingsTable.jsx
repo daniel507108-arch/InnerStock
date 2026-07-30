@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react"
 import SentimentBadge from "./SentimentBadge"
 import BullBearPanel from "./BullBearPanel"
+import { IconAlertTriangle, IconBolt } from "@tabler/icons-react"
 
 function HoldingsTable({ refreshKey }) {
   // Starts as an empty array — there's nothing to show before the fetch finishes.
@@ -69,21 +70,21 @@ function HoldingsTable({ refreshKey }) {
         .holdings-table th, .holdings-table td { padding: 0.5rem 1rem; text-align: left; border-bottom: 1px solid var(--color-border); }
         .holdings-table th { background: var(--color-surface); color: var(--color-text-secondary); font-weight: 500; }
         .holdings-table tbody tr:nth-child(even) { background: var(--color-surface-alt); }
-        .concentration-alert { background: var(--color-warning-bg); border: 1px solid var(--color-warning); color: var(--color-warning); padding: 0.75rem 1rem; border-radius: var(--radius-sm); margin-bottom: 1rem; }
+        .concentration-alert { ... margin-bottom: var(--space-md); }
         .sentiment-positive { background: var(--color-success-bg); color: var(--color-success); }
         .sentiment-negative { background: var(--color-danger-bg); color: var(--color-danger); }
         .sentiment-neutral { background: var(--color-surface); color: var(--color-text-secondary); }
-        .sentiment-loading { color: var(--color-text-secondary); }
-        .sentiment-unavailable { color: var(--color-text-secondary); }
         .sentiment-loading { color: var(--color-text-muted); }
         .sentiment-unavailable { color: var(--color-text-muted); }
-        .sentiment-badge { padding: 0.2rem 0.65rem; border-radius: 999px; font-size: 0.8rem; text-transform: capitalize; display: inline-block; }
+        .sentiment-badge { padding: 0.2rem 0.65rem; border-radius: 999px; font-size: var(--text-xs); text-transform: capitalize; display: inline-block; }
       `}</style>
 
       {/* Only shown at all if at least one holding is flagged overweight */}
       {overweightHoldings.length > 0 && (
         <div className="concentration-alert">
-          <strong>⚠️ Concentration Warning</strong>
+          <strong style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <IconAlertTriangle size={16} /> Concentration warning
+          </strong>
           <ul>
             {overweightHoldings.map((h) => (
               <li key={h.ticker}>
@@ -95,7 +96,7 @@ function HoldingsTable({ refreshKey }) {
       )}
 
       {/* Toggle buttons - just flip local "view" state, no new fetch needed */}
-      <div style={{ marginBottom: "0.75rem" }}>
+      <div style={{ marginBottom: "var(--space-sm)" }}>
         <button
           onClick={() => setView("all-time")}
           style={{ fontWeight: view === "all-time" ? "bold" : "normal" }}
@@ -126,11 +127,11 @@ function HoldingsTable({ refreshKey }) {
         <tbody>
           {holdings.map((h) => {
             // Frontend-calculated all-time values (see note on calculateGainLoss above)
-            const { gainLoss, gainLossPercent } = calculateGainLoss(h)
+            const activeGainLoss = view === "all-time" ? h.total_gain_loss : h.day_gain_loss
 
             // Whichever value is currently relevant, based on the toggle -
             // used for both the displayed text AND the color below
-            const activeGainLoss = view === "all-time" ? gainLoss : h.day_gain_loss
+            const activeGainLossPercent = view === "all-time" ? h.total_gain_loss_percent : h.day_gain_loss_percent
 
             return (
               <tr key={h.ticker} style={h.overweight_flag ? { color: "var(--color-danger)" } : {}}>
@@ -139,9 +140,7 @@ function HoldingsTable({ refreshKey }) {
                 <td>${h.avg_cost.toFixed(2)}</td>
                 <td>${h.current_price.toFixed(2)}</td>
                 <td style={{ color: activeGainLoss >= 0 ? "var(--color-success)" : "var(--color-danger)" }}>
-                  {view === "all-time"
-                    ? `${gainLoss >= 0 ? "+" : ""}$${gainLoss.toFixed(2)} (${gainLossPercent.toFixed(1)}%)`
-                    : `${h.day_gain_loss >= 0 ? "+" : ""}$${h.day_gain_loss.toFixed(2)} (${h.day_gain_loss_percent.toFixed(1)}%)`}
+                  {`${activeGainLoss >= 0 ? "+" : ""}$${activeGainLoss.toFixed(2)} (${activeGainLossPercent.toFixed(1)}%)`}
                 </td>
                 <td>${h.value.toFixed(2)}</td>
                 <td>{h.percentage.toFixed(1)}%</td>
@@ -153,11 +152,11 @@ function HoldingsTable({ refreshKey }) {
       </table>
 
       {/* AI bull/bear analysis - one panel per holding */}
-      <div style={{ marginTop: "1.5rem" }}>
-        <p style={{ fontWeight: "bold" }}>AI analysis</p>
+      <div style={{ marginTop: "var(--space-lg)" }}>
+        <p style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--text-md)" }}>AI analysis</p>
         {holdings.map((h) => (
           <div key={h.ticker} style={{ marginBottom: "0.5rem" }}>
-            <span style={{ fontWeight: "bold" }}>{h.ticker}</span>
+            <span style={{ fontWeight: "var(--font-weight-medium)" }}>{h.ticker}</span>
             <BullBearPanel ticker={h.ticker} />
           </div>
         ))}
