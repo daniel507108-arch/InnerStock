@@ -271,9 +271,40 @@ def get_holdings(db: Session = Depends(get_db)):
         holding["percentage"] = round(percentage, 2)
         holding["overweight_flag"] = percentage > 20
 
+    # NEW: average conviction score per holding, then averaged across positions.
+    # Only buy trades carry conviction (that's when the thesis was written),
+    # so a ticker bought multiple times at different conviction levels gets
+    # averaged first per-ticker, so one heavily-DCA'd position doesn't skew
+    # the portfolio number more than any other position.
+    conviction_by_ticker = {}
+    for trade in trades:
+        ticker = trade.ticker.upper()
+        if ticker in holdings and trade.action == "buy":
+            conviction_by_ticker.setdefault(ticker, []).append(trade.conviction_score)
+
+    per_ticker_avg_conviction = [
+        sum(scores) / len(scores) for scores in conviction_by_ticker.values()
+    ]
+    avg_conviction = (
+        sum(per_ticker_avg_conviction) / len(per_ticker_avg_conviction)
+        if per_ticker_avg_conviction else 0
+    )
+    # NEW: portfolio-wide today's gain/loss, derived from each holding's
+    # day_gain_loss. Subtracting today's total gain from total_value gives
+    # yesterday's portfolio value, which is the correct denominator for %.
+    total_day_gain_loss = sum(h["day_gain_loss"] for h in holdings_list)
+    portfolio_value_yesterday = total_value - total_day_gain_loss
+    day_change_percent = (
+        (total_day_gain_loss / portfolio_value_yesterday * 100)
+        if portfolio_value_yesterday > 0 else 0
+    )
     return {
         "holdings": holdings_list,
-        "total_value": total_value
+        "total_value": total_value,
+        "position_count": len(holdings_list),
+        "day_change_value": round(total_day_gain_loss, 2),
+        "day_change_percent": round(day_change_percent, 2),
+        "avg_conviction": round(avg_conviction, 2)
     }
 
 # Uses Claude to generate a bull case, bear case, and key risk for a given
@@ -563,80 +594,5 @@ def check_fomo_for_trade(trade):
     else:
         return {"fomo_flag": False, "reason": "No significant price move detected before this trade"}
 
-# Checks whether a trade was made shortly after a sharp price run-up -
-# a proxy for an emotionally-driven ("FOMO") entry rather than one
-# based on careful research, per the original product thesis.
-@app.get("/fomo-check/{trade_id}")
-def check_fomo(trade_id: int, db: Session = Depends(get_db)):
-    trade = db.query(Trade).filter(Trade.id == trade_id).first()
 
-    if not trade:
-        raise HTTPException(status_code=404, detail=f"Trade with id {trade_id} not found")
-
-    # Only "buy" trades make sense to flag - selling into a rally isn't FOMO
-    if trade.action != "buy":
-        return {
-            "trade_id": trade_id,
-            "ticker": trade.ticker,
-            "fomo_flag": False,
-            "reason": "Only buy trades are checked for FOMO"
-        }
-
-    ticker = trade.ticker.upper()
-
-    # Look at the 5 trading days leading up to (and including) the trade date.
-    # Using 7 calendar days as the window to comfortably cover 5 trading
-    # days even with a weekend in between.
-    end_date = trade.trade_date
-    start_date = end_date - timedelta(days=7)
-
-    try:
-        stock = yf.Ticker(ticker)
-        history = stock.history(start=start_date.isoformat(), end=(end_date + timedelta(days=1)).isoformat())
-    except Exception as e:
-        print(f"yfinance history fetch failed for {ticker}: {e}")
-        raise HTTPException(status_code=404, detail=f"Could not fetch price history for '{ticker}'")
-
-    if history.empty or len(history) < 2:
-        return {
-            "trade_id": trade_id,
-            "ticker": ticker,
-            "fomo_flag": False,
-            "reason": "Not enough price history available to check"
-        }
-
-    # First and last closing prices in this window
-    price_before = history["Close"].iloc[0]
-    price_at_trade = history["Close"].iloc[-1]
-
-    percent_change = ((price_at_trade - price_before) / price_before) * 100
-
-    # Convert numpy types to plain Python types before using them further -
-    # yfinance/pandas returns numpy floats, which FastAPI can't reliably
-    # convert to JSON on their own (this is what caused the 500 error)
-    percent_change = float(percent_change)
-
-    # Flag significant moves in either direction - a sharp RISE right before
-    # buying suggests FOMO (chasing hype); a sharp DROP right before buying
-    # suggests "buying the dip." Both are worth surfacing, but we report
-    # which one it is so the label stays meaningful.
-    FOMO_THRESHOLD = 5.0
-    significant_move = bool(abs(percent_change) > FOMO_THRESHOLD)
-
-    if significant_move and percent_change > 0:
-        fomo_flag = True
-        reason = f"Stock rose {round(percent_change, 2)}% in the days before this trade - possible FOMO entry"
-    elif significant_move and percent_change < 0:
-        fomo_flag = True
-        reason = f"Stock dropped {round(percent_change, 2)}% in the days before this trade - possible 'buying the dip'"
-    else:
-        fomo_flag = False
-        reason = "No significant price move detected before this trade"
-
-    return {
-        "trade_id": trade_id,
-        "ticker": ticker,
-        "price_change_percent": round(percent_change, 2),
-        "fomo_flag": fomo_flag,
-        "reason": reason
-    }
+    

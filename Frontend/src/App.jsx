@@ -2,7 +2,7 @@ import { useState } from 'react'
 import Layout from './components/Layout'
 import TradeForm from './components/TradeForm'
 import CsvUpload from './components/CsvUpload'
-import HoldingsTable from './components/HoldingsTable'
+import Dashboard from './components/Dashboard'
 import ThesisReview from './components/ThesisReview'
 
 function App() {
@@ -16,7 +16,7 @@ function App() {
   return (
     <Layout activeView={activeView} onNavigate={setActiveView}>
       {activeView === 'dashboard' && (
-        <HoldingsTable refreshKey={refreshKey} />
+        <Dashboard refreshKey={refreshKey} />
       )}
 
       {activeView === 'logtrade' && (

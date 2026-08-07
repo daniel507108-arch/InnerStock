@@ -1,52 +1,19 @@
-import { useState, useEffect } from "react"
+import { useState } from "react"
 import SentimentBadge from "./SentimentBadge"
 import BullBearPanel from "./BullBearPanel"
 import { IconAlertTriangle, IconBolt } from "@tabler/icons-react"
 
-function HoldingsTable({ refreshKey }) {
-  // Starts as an empty array — there's nothing to show before the fetch finishes.
-  const [holdings, setHoldings] = useState([])
-
-  // Tracks whether we're still waiting on the backend. Starts true, since
-  // the very first thing that happens is: we haven't gotten data back yet.
-  const [loading, setLoading] = useState(true)
-
-  // Holds an error message if the fetch fails, or null if everything's fine.
-  const [error, setError] = useState(null)
-
+// NOTE: no longer fetches its own data - Dashboard.jsx fetches /holdings
+// once and passes the result down as the `holdings` prop below. This
+// component is now purely: given holdings, render the table + concentration
+// alert + bull/bear panels. Loading/error/empty states are handled one
+// level up, in Dashboard.jsx, before this component ever renders.
+function HoldingsTable({ holdings }) {
   // Controls which gain/loss view is currently shown - toggled by the
   // buttons below. Both values are always present in the /holdings response,
   // so switching this doesn't require any new fetch - just re-reads a
   // different field from data we already have.
   const [view, setView] = useState("all-time") // "all-time" or "today"
-
-  useEffect(() => {
-    setLoading(true)
-    fetch("http://127.0.0.1:8000/holdings")
-      .then(response => response.json())
-      .then(data => {
-        setHoldings(data.holdings)
-        setLoading(false) // data arrived, no longer loading
-      })
-      .catch(error => {
-        setError(error.message)
-        setLoading(false) // failed, but also no longer "loading"
-      })
-  }, [refreshKey]) // re-run whenever refreshKey changes, i.e. whenever a trade is logged
-
-  // Three possible states, checked in order, top to bottom:
-
-  if (loading) {
-    return <p>Loading your holdings...</p>
-  }
-
-  if (error) {
-    return <p style={{ color: "red" }}>Failed to load holdings: {error}</p>
-  }
-
-  if (holdings.length === 0) {
-    return <p>No holdings yet — log a trade to get started.</p>
-  }
 
   // Holdings flagged by the backend as over the concentration threshold
   const overweightHoldings = holdings.filter(h => h.overweight_flag)
@@ -62,7 +29,8 @@ function HoldingsTable({ refreshKey }) {
     return { gainLoss, gainLossPercent }
   }
 
-  // Only reached once loading is done, there's no error, AND holdings has data.
+  // holdings is guaranteed non-empty here - Dashboard.jsx already checked
+  // loading/error/empty states before rendering this component at all.
   return (
     <div>
       <style>{`
