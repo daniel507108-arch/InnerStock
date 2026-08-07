@@ -61,8 +61,8 @@ if (reviews.length === 0) return <p style={{ color: "var(--color-text-secondary)
           <p style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-sm)" }}>Conviction at the time: {r.conviction_score}/5</p>
           {r.fomo_flag && (
   <p style={{ color: "var(--color-warning)", fontSize: "var(--text-sm)", display: "flex", alignItems: "center", gap: "6px" }}>
-  <IconBolt size={15} /> This entry followed a sharp price run-up — possible FOMO buy
-</p>
+    <IconBolt size={15} /> {r.fomo_reason}
+  </p>
 )}
 
           {["correct", "incorrect", "mixed"].map((outcome) => (

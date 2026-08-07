@@ -411,6 +411,8 @@ def get_thesis_reviews(db: Session = Depends(get_db)):
 
     reviews = []
     for trade in due_trades:
+        fomo_result = check_fomo_for_trade(trade)  # NEW
+
         reviews.append({
             "id": trade.id,
             "ticker": trade.ticker,
@@ -418,7 +420,9 @@ def get_thesis_reviews(db: Session = Depends(get_db)):
             "thesis_text": trade.thesis_text,
             "conviction_score": trade.conviction_score,
             "trade_date": trade.trade_date.isoformat(),
-            "review_date": trade.review_date.isoformat()
+            "review_date": trade.review_date.isoformat(),
+            "fomo_flag": fomo_result["fomo_flag"],  # NEW
+            "fomo_reason": fomo_result["reason"]  # NEW
         })
 
     return {"reviews": reviews}
@@ -520,6 +524,44 @@ SUMMARY: [two sentences explaining why, based on the headlines]"""
         "sentiment": sentiment,
         "summary": summary
     }
+
+# Checks whether a trade was made shortly after a sharp price move (up or
+# down) - a proxy for an emotionally-driven entry rather than one based on
+# careful research. Returns a dict with the flag and reasoning, or a
+# "not enough data" fallback if history isn't available.
+def check_fomo_for_trade(trade):
+    if trade.action != "buy":
+        return {"fomo_flag": False, "reason": "Only buy trades are checked for FOMO"}
+
+    ticker = trade.ticker.upper()
+    end_date = trade.trade_date
+    start_date = end_date - timedelta(days=10)
+
+    try:
+        stock = yf.Ticker(ticker)
+        history = stock.history(start=start_date.isoformat(), end=(end_date + timedelta(days=1)).isoformat())
+    except Exception as e:
+        print(f"yfinance history fetch failed for {ticker}: {e}")
+        return {"fomo_flag": False, "reason": "Could not fetch price history"}
+
+    if history.empty or len(history) < 2:
+        return {"fomo_flag": False, "reason": "Not enough price history available to check"}
+
+    price_at_trade = float(history["Close"].iloc[-1])
+    lookback_index = max(0, len(history) - 6)
+    price_before = float(history["Close"].iloc[lookback_index])
+
+    percent_change = float(((price_at_trade - price_before) / price_before) * 100)
+
+    FOMO_THRESHOLD = 8.0
+    significant_move = bool(abs(percent_change) > FOMO_THRESHOLD)
+
+    if significant_move and percent_change > 0:
+        return {"fomo_flag": True, "reason": f"Stock rose {round(percent_change, 2)}% in the days before this trade - possible FOMO entry"}
+    elif significant_move and percent_change < 0:
+        return {"fomo_flag": True, "reason": f"Stock dropped {round(percent_change, 2)}% in the days before this trade - possible 'buying the dip'"}
+    else:
+        return {"fomo_flag": False, "reason": "No significant price move detected before this trade"}
 
 # Checks whether a trade was made shortly after a sharp price run-up -
 # a proxy for an emotionally-driven ("FOMO") entry rather than one
