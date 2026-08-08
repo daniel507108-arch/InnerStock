@@ -101,51 +101,94 @@ async function handleTickerBlur() {
   }
 }
 
+function handleConvictionClick(score) {
+  setForm((prev) => ({ ...prev, conviction_score: score }))
+}
+
  return (
-  <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "var(--space-xs)", maxWidth: "320px", background: "var(--color-surface)", padding: "var(--space-md)", borderRadius: "var(--radius-md)" }}>
-    <label style={labelStyle}>
-      Ticker
-      <input name="ticker" value={form.ticker} onChange={(e) => setForm((prev) => ({ ...prev, ticker: e.target.value.toUpperCase() }))} onBlur={handleTickerBlur} placeholder="e.g. AAPL"
-      />
-    </label>
+  <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "var(--space-md)", maxWidth: "420px" }}>
 
-    <label style={labelStyle}>
-      Buy or Sell
-      <select name="action" value={form.action} onChange={handleChange}>
-        <option value="buy">Buy</option>
-        <option value="sell">Sell</option>
-      </select>
-    </label>
+    <div style={{ background: "var(--color-surface)", padding: "var(--space-md)", borderRadius: "var(--radius-md)" }}>
+      <p style={{ margin: "0 0 var(--space-sm)", fontSize: "var(--text-sm)", fontWeight: "var(--font-weight-medium)", color: "var(--color-text-secondary)" }}>
+        The trade
+      </p>
 
-    <label style={labelStyle}>
-      Quantity
-      <input name="quantity" type="number" value={form.quantity} onChange={handleChange} />
-    </label>
+      <div style={{ display: "flex", gap: "var(--space-sm)", marginBottom: "var(--space-sm)" }}>
+        <label style={{ ...labelStyle, flex: 1 }}>
+          Ticker
+          <input name="ticker" value={form.ticker} onChange={(e) => setForm((prev) => ({ ...prev, ticker: e.target.value.toUpperCase() }))} onBlur={handleTickerBlur} placeholder="e.g. AAPL" />
+        </label>
+        <label style={{ ...labelStyle, flex: 1 }}>
+          Action
+          <select name="action" value={form.action} onChange={handleChange}>
+            <option value="buy">Buy</option>
+            <option value="sell">Sell</option>
+          </select>
+        </label>
+      </div>
 
-    <label style={labelStyle}>
-      Price per Share
-      <input name="price_per_share" type="number" value={form.price_per_share} onChange={handleChange} />
-    </label>
+      <div style={{ display: "flex", gap: "var(--space-sm)", marginBottom: "var(--space-sm)" }}>
+        <label style={{ ...labelStyle, flex: 1 }}>
+          Quantity
+          <input name="quantity" type="number" value={form.quantity} onChange={handleChange} />
+        </label>
+        <label style={{ ...labelStyle, flex: 1 }}>
+          Price per share
+          <input name="price_per_share" type="number" value={form.price_per_share} onChange={handleChange} />
+          <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+            Auto-filled from today's price — edit if your fill price was different
+          </span>
+        </label>
+      </div>
 
-    <label style={labelStyle}>
-      Trade Date
-      <input name="trade_date" type="date" value={form.trade_date} onChange={handleChange} />
-    </label>
+      <label style={labelStyle}>
+        Trade date
+        <input name="trade_date" type="date" value={form.trade_date} onChange={handleChange} />
+      </label>
+    </div>
 
-    <label style={labelStyle}>
-      Your Thesis (why are you making this trade?)
-      <textarea name="thesis_text" value={form.thesis_text} onChange={handleChange} />
-    </label>
+    <div style={{ border: "1px solid var(--color-border-strong)", borderRadius: "var(--radius-md)", padding: "var(--space-md)" }}>
+      <p style={{ fontFamily: "var(--font-serif)", fontSize: "var(--text-lg)", margin: "0 0 var(--space-sm)", color: "var(--color-text-primary)" }}>
+        What's your reasoning?
+      </p>
+      <textarea name="thesis_text" value={form.thesis_text} onChange={handleChange} placeholder="Why are you making this trade?" style={{ width: "100%", minHeight: "70px" }} />
 
-    <label style={labelStyle}>
-      Conviction Score (1–5)
-      <input name="conviction_score" type="number" min="1" max="5" value={form.conviction_score} onChange={handleChange} />
-    </label>
+      <div style={{ marginTop: "var(--space-sm)" }}>
+        <label style={{ fontSize: "var(--text-sm)", color: "var(--color-text-secondary)", display: "block", marginBottom: "6px" }}>
+          How confident are you?
+        </label>
+        <div style={{ display: "flex", gap: "6px" }}>
+          {[1, 2, 3, 4, 5].map((score) => (
+            <button
+              key={score}
+              type="button"
+              onClick={() => handleConvictionClick(score)}
+              style={{
+                width: "36px",
+                padding: "6px 0",
+                fontSize: "var(--text-sm)",
+                fontWeight: form.conviction_score === score ? "var(--font-weight-medium)" : "var(--font-weight-normal)",
+                background: "transparent",
+                color: "var(--color-text-primary)",
+                border: form.conviction_score === score ? "1px solid var(--color-text-primary)" : "1px solid var(--color-border-strong)",
+                borderRadius: "var(--radius-sm)",
+                cursor: "pointer",
+              }}
+            >
+              {score}
+            </button>
+          ))}
+        </div>
+      </div>
 
-    <label style={labelStyle}>
-      Review Date (when should this thesis be revisited?)
-      <input name="review_date" type="date" value={form.review_date} onChange={handleChange} />
-    </label>
+      <label style={{ ...labelStyle, marginTop: "var(--space-sm)" }}>
+        Review date
+        <input name="review_date" type="date" value={form.review_date} onChange={handleChange} />
+        <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+          We'll ask you to revisit this thesis on this date
+        </span>
+      </label>
+    </div>
 
     <button
       type="submit"
@@ -154,13 +197,13 @@ async function handleTickerBlur() {
         color: "var(--color-on-primary)",
         border: "none",
         borderRadius: "var(--radius-sm)",
-        padding: "0.5rem",
-        fontWeight: 500,
+        padding: "0.6rem",
+        fontWeight: "var(--font-weight-medium)",
         cursor: "pointer",
       }}
-  >
-    Log trade
-  </button>
+    >
+      Log trade
+    </button>
 
     {status === "success" && <p style={{ color: "var(--color-success)" }}>Trade logged successfully.</p>}
     {status === "error" && <p style={{ color: "var(--color-danger)" }}>{errorMessage}</p>}
