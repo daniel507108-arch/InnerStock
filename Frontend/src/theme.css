@@ -45,4 +45,7 @@
   --font-weight-normal: 400;
   --font-weight-medium: 500;
   
+  --font-serif: Georgia, 'Times New Roman', serif;
+  --color-warning-fill: #834c15;
+  --color-on-warning: #fff1de;
 }
