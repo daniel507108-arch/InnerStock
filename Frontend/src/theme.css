@@ -17,9 +17,9 @@
   --color-accent: #2dd4bf;
 
   /* Status colors */
-  --color-success: #8fd88f;
+  --color-success: #0dc00d;
   --color-success-bg: #1a3a1a;
-  --color-danger: #ffb3b3;
+  --color-danger: #fa0505;
   --color-danger-bg: #3a1a1a;
   --color-warning: #ffcc66;
   --color-warning-bg: #3a2f1a;
@@ -42,10 +42,19 @@
   --text-base: 14px;
   --text-md: 15px;
   --text-lg: 18px;
-  --font-weight-normal: 400;
-  --font-weight-medium: 500;
+  --font-weight-normal: 500;
+  --font-weight-medium: 600;
   
   --font-serif: Georgia, 'Times New Roman', serif;
-  --color-warning-fill: #834c15;
-  --color-on-warning: #fff1de;
+  --color-warning-fill: #311a00;
+  --color-on-warning: #bd7e00;
+}
+
+body {
+  font-weight: var(--font-weight-normal);
+}
+
+input, select, textarea, button {
+  font-family: inherit;
+  font-weight: inherit;
 }

@@ -20,10 +20,10 @@ function App() {
       )}
 
       {activeView === 'logtrade' && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-lg)" }}>
-            <TradeForm onTradeLogged={handleTradeLogged} />
-            <CsvUpload onTradeLogged={handleTradeLogged} />
-        </div>
+  <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-lg)", maxWidth: "440px", margin: "0 auto" }}>
+    <TradeForm onTradeLogged={handleTradeLogged} />
+    <CsvUpload onTradeLogged={handleTradeLogged} />
+  </div>
       )}
 
       {activeView === 'thesisreview' && (
