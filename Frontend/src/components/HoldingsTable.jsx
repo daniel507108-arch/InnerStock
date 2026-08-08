@@ -40,7 +40,7 @@ function HoldingsTable({ holdings }) {
         .holdings-table th, .holdings-table td { padding: 0.5rem 1rem; text-align: left; border-bottom: 1px solid var(--color-border); }
         .holdings-table th { background: var(--color-surface); color: var(--color-text-secondary); font-weight: 500; }
         .holdings-table tbody tr:nth-child(even) { background: var(--color-surface-alt); }
-        .concentration-alert { ... margin-bottom: var(--space-md); }
+        .concentration-alert { background: var(--color-warning-fill); border: none; color: var(--color-on-warning); padding: 0.85rem 1.1rem; border-radius: var(--radius-sm); margin-bottom: var(--space-md); font-weight: var(--font-weight-medium); }
         .sentiment-positive { background: var(--color-success-bg); color: var(--color-success); }
         .sentiment-negative { background: var(--color-danger-bg); color: var(--color-danger); }
         .sentiment-neutral { background: var(--color-surface); color: var(--color-text-secondary); }
@@ -104,7 +104,7 @@ function HoldingsTable({ holdings }) {
 
   return (
     <>
-      <tr key={h.ticker} style={h.overweight_flag ? { color: "var(--color-danger)" } : {}}>
+      <tr key={h.ticker}>
         <td>{h.ticker}</td>
         <td>{h.shares}</td>
         <td>${h.avg_cost.toFixed(2)}</td>
@@ -113,7 +113,9 @@ function HoldingsTable({ holdings }) {
           {`${activeGainLoss >= 0 ? "+" : ""}$${activeGainLoss.toFixed(2)} (${activeGainLossPercent.toFixed(1)}%)`}
         </td>
         <td>${h.value.toFixed(2)}</td>
-        <td>{h.percentage.toFixed(1)}%</td>
+        <td style={h.overweight_flag ? { color: "var(--color-warning)", fontWeight: "var(--font-weight-medium)" } : {}}>
+  {h.percentage.toFixed(1)}%
+</td>
         <td><SentimentBadge ticker={h.ticker} /></td>
         <td>
           <button
