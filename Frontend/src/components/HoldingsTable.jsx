@@ -18,6 +18,8 @@ function HoldingsTable({ holdings }) {
   // Holdings flagged by the backend as over the concentration threshold
   const overweightHoldings = holdings.filter(h => h.overweight_flag)
 
+  const [expandedTicker, setExpandedTicker] = useState(null)
+
   // Calculates all-time gain/loss on the frontend from avg_cost and
   // current_price. Note: the backend already sends this same info as
   // total_gain_loss / total_gain_loss_percent - this function duplicates
@@ -90,45 +92,52 @@ function HoldingsTable({ holdings }) {
             <th>Value</th>
             <th>% of Portfolio</th>
             <th>Sentiment</th>
+            <th>Analysis</th>
           </tr>
         </thead>
         <tbody>
           {holdings.map((h) => {
-            // Frontend-calculated all-time values (see note on calculateGainLoss above)
-            const activeGainLoss = view === "all-time" ? h.total_gain_loss : h.day_gain_loss
+  const { gainLoss, gainLossPercent } = calculateGainLoss ? calculateGainLoss(h) : {}
+  const activeGainLoss = view === "all-time" ? h.total_gain_loss : h.day_gain_loss
+  const activeGainLossPercent = view === "all-time" ? h.total_gain_loss_percent : h.day_gain_loss_percent
+  const isExpanded = expandedTicker === h.ticker
 
-            // Whichever value is currently relevant, based on the toggle -
-            // used for both the displayed text AND the color below
-            const activeGainLossPercent = view === "all-time" ? h.total_gain_loss_percent : h.day_gain_loss_percent
-
-            return (
-              <tr key={h.ticker} style={h.overweight_flag ? { color: "var(--color-danger)" } : {}}>
-                <td>{h.ticker}</td>
-                <td>{h.shares}</td>
-                <td>${h.avg_cost.toFixed(2)}</td>
-                <td>${h.current_price.toFixed(2)}</td>
-                <td style={{ color: activeGainLoss >= 0 ? "var(--color-success)" : "var(--color-danger)" }}>
-                  {`${activeGainLoss >= 0 ? "+" : ""}$${activeGainLoss.toFixed(2)} (${activeGainLossPercent.toFixed(1)}%)`}
-                </td>
-                <td>${h.value.toFixed(2)}</td>
-                <td>{h.percentage.toFixed(1)}%</td>
-                <td><SentimentBadge ticker={h.ticker} /></td>
-              </tr>
-            )
-          })}
+  return (
+    <>
+      <tr key={h.ticker} style={h.overweight_flag ? { color: "var(--color-danger)" } : {}}>
+        <td>{h.ticker}</td>
+        <td>{h.shares}</td>
+        <td>${h.avg_cost.toFixed(2)}</td>
+        <td>${h.current_price.toFixed(2)}</td>
+        <td style={{ color: activeGainLoss >= 0 ? "var(--color-success)" : "var(--color-danger)" }}>
+          {`${activeGainLoss >= 0 ? "+" : ""}$${activeGainLoss.toFixed(2)} (${activeGainLossPercent.toFixed(1)}%)`}
+        </td>
+        <td>${h.value.toFixed(2)}</td>
+        <td>{h.percentage.toFixed(1)}%</td>
+        <td><SentimentBadge ticker={h.ticker} /></td>
+        <td>
+          <button
+            onClick={() => setExpandedTicker(isExpanded ? null : h.ticker)}
+            style={{ background: "transparent", border: "1px solid var(--color-border-strong)", borderRadius: "var(--radius-sm)", padding: "0.3rem 0.6rem", cursor: "pointer", fontSize: "var(--text-xs)" }}
+          >
+            {isExpanded ? "Hide" : "View"}
+          </button>
+        </td>
+      </tr>
+      {isExpanded && (
+        <tr>
+          <td colSpan={9} style={{ background: "var(--color-surface-alt)", padding: "var(--space-md)" }}>
+            <BullBearPanel ticker={h.ticker} forceExpanded />
+          </td>
+        </tr>
+      )}
+    </>
+  )
+})}
         </tbody>
       </table>
 
-      {/* AI bull/bear analysis - one panel per holding */}
-      <div style={{ marginTop: "var(--space-lg)" }}>
-        <p style={{ fontWeight: "var(--font-weight-medium)", fontSize: "var(--text-md)" }}>AI analysis</p>
-        {holdings.map((h) => (
-          <div key={h.ticker} style={{ marginBottom: "0.5rem" }}>
-            <span style={{ fontWeight: "var(--font-weight-medium)" }}>{h.ticker}</span>
-            <BullBearPanel ticker={h.ticker} />
-          </div>
-        ))}
-      </div>
+      
     </div>
   )
 }
