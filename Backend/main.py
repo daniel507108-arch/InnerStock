@@ -1,6 +1,5 @@
 # Import the main FastAPI class - this is the toolkit that lets us build a web server
-from fastapi import FastAPI, Depends
-from fastapi import FastAPI, Depends, HTTPException
+from fastapi import FastAPI, Depends, HTTPException, Header
 
 # Import CORS middleware - this handles the "permission" between frontend and backend
 from fastapi.middleware.cors import CORSMiddleware
@@ -17,7 +16,7 @@ from models import Trade
 # so FastAPI can validate it automatically before our code even runs
 from pydantic import BaseModel
 from datetime import date
-from models import Trade, PriceCache
+from models import Trade, PriceCache, User
 from datetime import date, datetime, timedelta
 
 #FOR THE CLAUDE API
@@ -33,6 +32,8 @@ import io
 load_dotenv()
 
 claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+from auth import hash_password, verify_password, create_access_token, decode_access_token
 
 # Create the actual app instance. Everything below attaches to this "app" object.
 app = FastAPI()
@@ -69,6 +70,21 @@ class TradeCreate(BaseModel):
     thesis_text: str
     conviction_score: int
     review_date: date
+
+from pydantic import BaseModel, EmailStr
+
+class UserSignup(BaseModel):
+    name: str
+    email: EmailStr
+    password: str
+
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
 
 # This is a "route" - it defines what happens when someone visits a specific URL.
 # @app.get("/") means: when someone visits the homepage using a GET request, run this function.
@@ -660,4 +676,63 @@ def get_trading_patterns(db: Session = Depends(get_db)):
             "non_fomo": {**non_fomo_stats, "correct_rate": correct_rate(non_fomo_stats)}
         }
     }
-    
+# Creates a new user account. Rejects duplicate emails, hashes the password
+# before it ever touches the database, and immediately returns a token so
+# the frontend can log the user straight in without a separate login step.
+@app.post("/auth/signup", response_model=TokenResponse)
+def signup(payload: UserSignup, db: Session = Depends(get_db)):
+    existing = db.query(User).filter(User.email == payload.email).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="An account with this email already exists")
+
+    new_user = User(
+        name=payload.name,
+        email=payload.email,
+        hashed_password=hash_password(payload.password)
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+
+    token = create_access_token(new_user.id)
+    return {"access_token": token}
+
+
+# Verifies email + password against the stored hash, returns a fresh token
+# on success. Deliberately returns the same generic error whether the email
+# doesn't exist OR the password is wrong - never reveal which one it was,
+# since that tells an attacker whether a given email has an account here.
+@app.post("/auth/login", response_model=TokenResponse)
+def login(payload: UserLogin, db: Session = Depends(get_db)):
+    user = db.query(User).filter(User.email == payload.email).first()
+    if not user or not verify_password(payload.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+
+    token = create_access_token(user.id)
+    return {"access_token": token}
+
+
+# Dependency for protected endpoints - decodes the token from the
+# Authorization header, looks up the matching user, and returns it.
+# Raises 401 if the token is missing, invalid, or the user no longer exists.
+def get_current_user(authorization: str = Header(None), db: Session = Depends(get_db)):
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    token = authorization.replace("Bearer ", "")
+    user_id = decode_access_token(token)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    return user
+
+
+# Lets the frontend check "am I logged in, and as who" on app load, using
+# whatever token is currently stored client-side.
+@app.get("/auth/me")
+def get_me(current_user: User = Depends(get_current_user)):
+    return {"id": current_user.id, "name": current_user.name, "email": current_user.email}
