@@ -1,5 +1,6 @@
 # Import the main FastAPI class - this is the toolkit that lets us build a web server
 from fastapi import FastAPI, Depends, HTTPException, Header
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 # Import CORS middleware - this handles the "permission" between frontend and backend
 from fastapi.middleware.cors import CORSMiddleware
@@ -37,6 +38,7 @@ from auth import hash_password, verify_password, create_access_token, decode_acc
 
 # Create the actual app instance. Everything below attaches to this "app" object.
 app = FastAPI()
+bearer_scheme = HTTPBearer()
 
 # CORS setup: by default, browsers block a webpage on one address (localhost:5173)
 # from fetching data from a different address (localhost:8000) unless the second
@@ -57,6 +59,26 @@ def get_db():
         yield db
     finally:
         db.close()
+
+# MOVED UP: Dependency for protected endpoints - decodes the token from the
+# Authorization header, looks up the matching user, and returns it.
+# Raises 401 if the token is missing, invalid, or the user no longer exists.
+# Needs to be defined here, before any endpoint below uses it as
+# Depends(get_current_user) - Python needs the function to already exist
+# at the point each endpoint is defined, since default argument values
+# (including Depends(...)) get evaluated as the file loads top to bottom.
+def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme), db: Session = Depends(get_db)):
+    token = credentials.credentials  # HTTPBearer already strips the "Bearer " prefix for us
+
+    user_id = decode_access_token(token)
+    if user_id is None:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+
+    return user
 
 # This defines exactly what fields a new trade submission must contain, taken from Pydantic
 # If someone sends data missing a required field or with the wrong type,
@@ -154,6 +176,8 @@ def get_or_fetch_price(ticker: str, db: Session):
 # --- /stock/{ticker} route ---
 # Now just calls the shared helper above and formats the response.
 # All the actual caching/fetching logic lives in get_or_fetch_price.
+# NOT user-scoped - this is a public price lookup, not tied to any
+# specific person's portfolio, so no login required here.
 @app.get("/stock/{ticker}")
 def get_stock(ticker: str, db: Session = Depends(get_db)):
     ticker = ticker.upper()
@@ -175,10 +199,13 @@ def get_stock(ticker: str, db: Session = Depends(get_db)):
 
 # Creates a new trade. Takes JSON matching the TradeCreate shape above,
 # saves it to the database, and returns the saved trade (now with an id).
+# PROTECTED + SCOPED: requires login, and the new trade is stamped with
+# whoever's actually logged in - never trusted from the client, so no one
+# can create a trade under someone else's account.
 @app.post("/trades") # When front end sents POST request to /trades this will run
-def create_trade(trade: TradeCreate, db: Session = Depends(get_db)): #Uses function get_db to open a connection to database
+def create_trade(trade: TradeCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)): #Uses function get_db to open a connection to database
     new_trade = Trade( #CONSTRUCTOR
-        user_id=1,  # hardcoded for now - matches your single-user MVP decision
+        user_id=current_user.id,  # taken from the logged-in user, not the client
         ticker=trade.ticker,
         action=trade.action,
         quantity=trade.quantity,
@@ -194,15 +221,17 @@ def create_trade(trade: TradeCreate, db: Session = Depends(get_db)): #Uses funct
     return new_trade
 
 # Returns every trade currently saved in the database.
+# PROTECTED + SCOPED: only returns trades belonging to whoever's logged in.
 @app.get("/trades")
-def get_trades(db: Session = Depends(get_db)):
-    return db.query(Trade).all()
+def get_trades(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    return db.query(Trade).filter(Trade.user_id == current_user.id).all()
 
 # Puts all trades into current holdings, calculates each position's
 # share of the total portfolio, and flags any position over 20%.
+# PROTECTED + SCOPED: only aggregates the logged-in user's own trades.
 @app.get("/holdings")
-def get_holdings(db: Session = Depends(get_db)):
-    trades = db.query(Trade).all()
+def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    trades = db.query(Trade).filter(Trade.user_id == current_user.id).all()
 
     # Step 1: tally net shares held per ticker (buys add, sells subtract)
     holdings = {}
@@ -325,6 +354,7 @@ def get_holdings(db: Session = Depends(get_db)):
 
 # Uses Claude to generate a bull case, bear case, and key risk for a given
 # ticker, based on data we already have cached (no new yfinance call needed).
+# NOT user-scoped - stock-level analysis, not tied to a specific portfolio.
 @app.get("/bullbear/{ticker}")
 def get_bull_bear(ticker: str, db: Session = Depends(get_db)):
     ticker = ticker.upper()
@@ -366,8 +396,10 @@ Key Risk: [1 sentence]"""
 # Accepts a CSV file upload, validates each row using the same rules as
 # POST /trades, saves valid rows, and reports errors for invalid ones
 # without rejecting the whole file.
+# PROTECTED + SCOPED: every imported trade is stamped with the logged-in
+# user's id, same as POST /trades.
 @app.post("/trades/import")
-async def import_trades(file: UploadFile = File(...), db: Session = Depends(get_db)):
+async def import_trades(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     contents = await file.read()
     decoded = contents.decode("utf-8")
     reader = csv.DictReader(io.StringIO(decoded))
@@ -423,7 +455,7 @@ async def import_trades(file: UploadFile = File(...), db: Session = Depends(get_
 
             # all checks passed - save this row
             new_trade = Trade(
-                user_id=1,
+                user_id=current_user.id,
                 ticker=ticker,
                 action=action,
                 quantity=quantity,
@@ -448,10 +480,12 @@ async def import_trades(file: UploadFile = File(...), db: Session = Depends(get_
 
 # Returns every trade where the review date has passed but it hasn't
 # been graded yet (outcome_tag still null) - these are "due for review."
+# PROTECTED + SCOPED: only the logged-in user's own trades are checked.
 @app.get("/thesis-reviews")
-def get_thesis_reviews(db: Session = Depends(get_db)):
+def get_thesis_reviews(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     today = date.today()
     due_trades = db.query(Trade).filter(
+        Trade.user_id == current_user.id,
         Trade.review_date <= today,
         Trade.outcome_tag.is_(None)
     ).all()
@@ -482,9 +516,12 @@ class OutcomeUpdate(BaseModel):
 
 # Updates one specific trade's outcome_tag. Once set, that trade stops
 # showing up in GET /thesis-reviews above.
+# PROTECTED + SCOPED: confirms the trade actually belongs to the logged-in
+# user before allowing the update - otherwise anyone could edit anyone
+# else's trade just by guessing an id number.
 @app.patch("/trades/{trade_id}/outcome") #PATCH HTTP method updates something existing
-def update_trade_outcome(trade_id: int, update: OutcomeUpdate, db: Session = Depends(get_db)):
-    trade = db.query(Trade).filter(Trade.id == trade_id).first()
+def update_trade_outcome(trade_id: int, update: OutcomeUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    trade = db.query(Trade).filter(Trade.id == trade_id, Trade.user_id == current_user.id).first()
 
     if not trade:
         raise HTTPException(status_code=404, detail=f"Trade with id {trade_id} not found")
@@ -497,6 +534,7 @@ def update_trade_outcome(trade_id: int, update: OutcomeUpdate, db: Session = Dep
 # Pulls recent news headlines via yfinance, sends them to Claude for a
 # single overall sentiment classification, and returns exactly one of:
 # "positive", "neutral", "negative".
+# NOT user-scoped - stock-level sentiment, not tied to a specific portfolio.
 @app.get("/sentiment/{ticker}") 
 def get_sentiment(ticker: str, db: Session = Depends(get_db)):
     ticker = ticker.upper()  # normalize, same habit as our other stock routes
@@ -614,9 +652,10 @@ def check_fomo_for_trade(trade):
 # conviction actually correlates with better outcomes, and whether FOMO-flagged
 # trades perform worse than non-FOMO ones. This is the ground-truth data layer
 # a future AI-generated tendency summary will reason over.
+# PROTECTED + SCOPED: only the logged-in user's own reviewed trades count.
 @app.get("/trading-patterns")
-def get_trading_patterns(db: Session = Depends(get_db)):
-    trades = db.query(Trade).all()
+def get_trading_patterns(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    trades = db.query(Trade).filter(Trade.user_id == current_user.id).all()
 
     # Only trades that have actually been reviewed (outcome_tag set) count
     # toward the stats - everything else just gets counted as pending.
@@ -676,6 +715,7 @@ def get_trading_patterns(db: Session = Depends(get_db)):
             "non_fomo": {**non_fomo_stats, "correct_rate": correct_rate(non_fomo_stats)}
         }
     }
+
 # Creates a new user account. Rejects duplicate emails, hashes the password
 # before it ever touches the database, and immediately returns a token so
 # the frontend can log the user straight in without a separate login step.
@@ -710,25 +750,6 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
 
     token = create_access_token(user.id)
     return {"access_token": token}
-
-
-# Dependency for protected endpoints - decodes the token from the
-# Authorization header, looks up the matching user, and returns it.
-# Raises 401 if the token is missing, invalid, or the user no longer exists.
-def get_current_user(authorization: str = Header(None), db: Session = Depends(get_db)):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-
-    token = authorization.replace("Bearer ", "")
-    user_id = decode_access_token(token)
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-
-    return user
 
 
 # Lets the frontend check "am I logged in, and as who" on app load, using
