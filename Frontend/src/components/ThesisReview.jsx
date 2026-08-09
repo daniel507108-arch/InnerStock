@@ -33,7 +33,7 @@ function ThesisReview() {
   const [recentRefreshKey, setRecentRefreshKey] = useState(0)
 
   useEffect(() => {
-    fetch("http://127.0.0.1:8000/thesis-reviews")
+    apiFetch("/thesis-reviews")
       .then(response => {
         if (!response.ok) throw new Error("Thesis review endpoint not available yet")
         return response.json()
@@ -49,7 +49,7 @@ function ThesisReview() {
   }, [])
 
 useEffect(() => {
-  fetch("http://127.0.0.1:8000/thesis-reviews/recent")
+  apiFetch("/thesis-reviews/recent")
     .then(response => {
       if (!response.ok) throw new Error("not available")
       return response.json()
@@ -61,7 +61,7 @@ useEffect(() => {
   async function handleOutcome(tradeId, outcome) {
     setSubmittingId(tradeId)
     try {
-      const response = await fetch(`http://127.0.0.1:8000/trades/${tradeId}/outcome`, {
+      const response = await apiFetch(`/trades/${tradeId}/outcome`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ outcome_tag: outcome }),
@@ -98,7 +98,7 @@ function getDueStatus(reviewDate) {
 
   return (
     <div style={{ background: "var(--color-surface)", padding: "16px", borderRadius: "var(--radius-md)" }}>
-      <h3 style={{ marginTop: 0, fontSize: "var(--text-lg)", fontWeight: "var(--font-weight-medium)", color: "var(--color-text-primary)" }}>Thesis review</h3>
+      <h3 style={{ marginTop: 0, marginBottom: "4px", fontSize: "var(--text-lg)", fontWeight: "var(--font-weight-medium)", color: "var(--color-text-primary)" }}>Thesis review</h3>
 <p style={{ fontSize: "var(--text-sm)", color: "var(--color-text-secondary)", display: "flex", alignItems: "center", gap: "6px", marginBottom: "var(--space-md)" }}>
   <IconClock size={15} /> {reviews.length} thesis{reviews.length === 1 ? "" : "es"} due for review
 </p>

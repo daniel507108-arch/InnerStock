@@ -24,7 +24,7 @@ function NavItem({ label, active, onClick, icon }) {
   )
 }
 
-function Layout({ activeView, onNavigate, children }) {
+function Layout({ activeView, onNavigate, onLogout, children }) {
   return (
     <div style={{ background: "var(--color-bg)", minHeight: "100vh", color: "var(--color-text-primary)" }}>
       <nav style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", borderBottom: "1px solid var(--color-border)" }}>
@@ -39,6 +39,12 @@ function Layout({ activeView, onNavigate, children }) {
           <NavItem label="Log trade" active={activeView === "logtrade"} onClick={() => onNavigate("logtrade")} icon={<IconPlus size={16} />} />
           <NavItem label="Thesis review" active={activeView === "thesisreview"} onClick={() => onNavigate("thesisreview")} icon={<IconClock size={16} />} />
         </div>
+        <button
+  onClick={onLogout}
+  style={{ background: "transparent", border: "1px solid var(--color-border-strong)", borderRadius: "var(--radius-sm)", padding: "0.3rem 0.7rem", color: "var(--color-text-secondary)", fontSize: "var(--text-sm)", cursor: "pointer" }}
+>
+  Log out
+</button>
       </nav>
       <main style={{ padding: "20px" }}>
         {children}

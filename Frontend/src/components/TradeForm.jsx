@@ -1,5 +1,6 @@
 import { useState } from "react"
 
+
 function TradeForm({ onTradeLogged }) {
   // One object holding every field in the form, instead of a separate
   // useState for each — easier to manage as the form grows.
@@ -54,7 +55,7 @@ function TradeForm({ onTradeLogged }) {
 
     try {
       // Send the form data to the backend as JSON.
-      const response = await fetch("http://127.0.0.1:8000/trades", {
+      const response = await apiFetch("/trades", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
@@ -88,7 +89,7 @@ async function handleTickerBlur() {
   if (!form.ticker || form.price_per_share !== "") return
 
   try {
-    const response = await fetch(`http://127.0.0.1:8000/stock/${form.ticker}`)
+    const response = await apiFetch(`/stock/${form.ticker}`)
     if (!response.ok) return // invalid ticker, or a graceful error — just leave price blank, no big deal
 
     const data = await response.json()
