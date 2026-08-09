@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react"
 import StatsCards from "./StatsCards"
 import HoldingsTable from "./HoldingsTable"
+import { apiFetch } from "../api"
 
 // Owns the ONE /holdings fetch for the whole dashboard view. StatsCards and
 // HoldingsTable both need this same data - fetching it once here and passing

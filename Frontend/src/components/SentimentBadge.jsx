@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react"
+import { apiFetch } from "../api"
 
 function SentimentBadge({ ticker }) {
   const [sentiment, setSentiment] = useState(null)

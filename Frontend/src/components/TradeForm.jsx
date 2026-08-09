@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { apiFetch } from "../api"
 
 
 function TradeForm({ onTradeLogged }) {

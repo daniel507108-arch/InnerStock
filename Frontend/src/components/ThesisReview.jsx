@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react"
 import { IconBolt, IconClock } from "@tabler/icons-react"
+import { apiFetch } from "../api"
 
 function ConvictionDots({ score }) {
   return (

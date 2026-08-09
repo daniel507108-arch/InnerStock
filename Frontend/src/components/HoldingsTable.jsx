@@ -1,7 +1,8 @@
-import { useState } from "react"
+import { useState, useEffect, Fragment } from "react"
 import SentimentBadge from "./SentimentBadge"
 import BullBearPanel from "./BullBearPanel"
 import { IconAlertTriangle, IconBolt } from "@tabler/icons-react"
+import { apiFetch } from "../api"
 
 // NOTE: no longer fetches its own data - Dashboard.jsx fetches /holdings
 // once and passes the result down as the `holdings` prop below. This
@@ -103,8 +104,8 @@ function HoldingsTable({ holdings }) {
   const isExpanded = expandedTicker === h.ticker
 
   return (
-    <>
-      <tr key={h.ticker}>
+  <Fragment key={h.ticker}>
+    <tr>
         <td>{h.ticker}</td>
         <td>{h.shares}</td>
         <td>${h.avg_cost.toFixed(2)}</td>
@@ -127,14 +128,14 @@ function HoldingsTable({ holdings }) {
         </td>
       </tr>
       {isExpanded && (
-        <tr>
+        <tr key={`${h.ticker}-analysis`}>
           <td colSpan={9} style={{ background: "var(--color-surface-alt)", padding: "var(--space-md)" }}>
             <BullBearPanel ticker={h.ticker} forceExpanded />
           </td>
         </tr>
       )}
-    </>
-  )
+    </Fragment>
+)
 })}
         </tbody>
       </table>
