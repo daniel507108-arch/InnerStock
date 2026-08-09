@@ -594,5 +594,70 @@ def check_fomo_for_trade(trade):
     else:
         return {"fomo_flag": False, "reason": "No significant price move detected before this trade"}
 
+# Aggregates reviewed trades to surface behavioral patterns: whether higher
+# conviction actually correlates with better outcomes, and whether FOMO-flagged
+# trades perform worse than non-FOMO ones. This is the ground-truth data layer
+# a future AI-generated tendency summary will reason over.
+@app.get("/trading-patterns")
+def get_trading_patterns(db: Session = Depends(get_db)):
+    trades = db.query(Trade).all()
 
+    # Only trades that have actually been reviewed (outcome_tag set) count
+    # toward the stats - everything else just gets counted as pending.
+    reviewed = [t for t in trades if t.outcome_tag]
+    pending = [t for t in trades if not t.outcome_tag]
+
+    # --- Correct rate by conviction score ---
+    # Groups reviewed trades by their conviction_score (1-5), tallying how
+    # many landed in each outcome bucket, so we can see whether higher
+    # conviction actually predicts correct calls.
+    by_conviction = {}
+    for t in reviewed:
+        score = t.conviction_score
+        by_conviction.setdefault(score, {"correct": 0, "incorrect": 0, "mixed": 0, "total": 0})
+        by_conviction[score][t.outcome_tag] += 1
+        by_conviction[score]["total"] += 1
+
+    conviction_breakdown = []
+    for score in sorted(by_conviction.keys()):
+        stats = by_conviction[score]
+        correct_rate = (stats["correct"] / stats["total"] * 100) if stats["total"] > 0 else 0
+        conviction_breakdown.append({
+            "conviction_score": score,
+            "total": stats["total"],
+            "correct": stats["correct"],
+            "incorrect": stats["incorrect"],
+            "mixed": stats["mixed"],
+            "correct_rate": round(correct_rate, 1)
+        })
+
+    # --- Correct rate: FOMO-flagged vs non-FOMO trades ---
+    # Only "buy" trades are checked for FOMO (selling into a rally isn't FOMO -
+    # same rule check_fomo_for_trade already applies), so sells are skipped here.
+    # NOTE: this calls check_fomo_for_trade() once per reviewed buy trade, which
+    # means a live yfinance lookup each time - fine for now, but worth caching
+    # the FOMO result on the trade itself once there's real trade volume.
+    fomo_stats = {"correct": 0, "incorrect": 0, "mixed": 0, "total": 0}
+    non_fomo_stats = {"correct": 0, "incorrect": 0, "mixed": 0, "total": 0}
+
+    for t in reviewed:
+        if t.action != "buy":
+            continue
+        fomo_result = check_fomo_for_trade(t)
+        target = fomo_stats if fomo_result["fomo_flag"] else non_fomo_stats
+        target[t.outcome_tag] += 1
+        target["total"] += 1
+
+    def correct_rate(stats):
+        return round((stats["correct"] / stats["total"] * 100) if stats["total"] > 0 else 0, 1)
+
+    return {
+        "reviewed_count": len(reviewed),
+        "pending_count": len(pending),
+        "by_conviction": conviction_breakdown,
+        "fomo_vs_non_fomo": {
+            "fomo": {**fomo_stats, "correct_rate": correct_rate(fomo_stats)},
+            "non_fomo": {**non_fomo_stats, "correct_rate": correct_rate(non_fomo_stats)}
+        }
+    }
     
