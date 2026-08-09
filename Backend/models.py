@@ -8,6 +8,9 @@ class User(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False)
+    email = Column(String, unique=True, nullable=False, index=True)
+    hashed_password = Column(String, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
 
 #THE TRADE OBJECT 
 class Trade(Base):
