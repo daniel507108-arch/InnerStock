@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { apiFetch } from "../api"
 
 function CsvUpload({ onTradeLogged }) {
   // Holds the actual file the user picked, or null if nothing's picked yet.
@@ -18,7 +19,7 @@ function CsvUpload({ onTradeLogged }) {
     formData.append("file", file)
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/trades/import", {
+      const response = await apiFetch("/trades/import", {
         method: "POST",
         body: formData,
       })
