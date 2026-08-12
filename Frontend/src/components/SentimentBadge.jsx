@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react"
+import { apiFetch } from "../api"
 
 function SentimentBadge({ ticker }) {
   const [sentiment, setSentiment] = useState(null)
@@ -10,7 +11,7 @@ function SentimentBadge({ ticker }) {
     setLoading(true)
     setUnavailable(false)
 
-    fetch(`http://127.0.0.1:8000/sentiment/${ticker}`)
+    apiFetch(`/sentiment/${ticker}`)
       .then(response => {
         if (!response.ok) throw new Error("not available")
         return response.json()

@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react"
+import { apiFetch } from "../api"
 
 function BullBearPanel({ ticker, forceExpanded }) {
   const [expanded, setExpanded] = useState(false)
@@ -22,7 +23,7 @@ function BullBearPanel({ ticker, forceExpanded }) {
     setLoading(true)
     setError(null)
     try {
-      const response = await fetch(`http://127.0.0.1:8000/bullbear/${ticker}`)
+      const response = await apiFetch(`/bullbear/${ticker}`)
       if (!response.ok) throw new Error("Analysis not available yet")
       const result = await response.json()
       setData(result)

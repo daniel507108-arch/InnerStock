@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { apiFetch } from "../api"
 
 function TradeForm({ onTradeLogged }) {
   // One object holding every field in the form, instead of a separate
@@ -53,14 +54,14 @@ function TradeForm({ onTradeLogged }) {
     }
 
     try {
-      // Send the form data to the backend as JSON.
-      const response = await fetch("http://127.0.0.1:8000/trades", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
-      })
+  // Send the form data to the backend as JSON.
+  const response = await apiFetch("/trades", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(form),
+  })
 
-      if (!response.ok) {
+  if (!response.ok) {
         // The backend responded, but with an error (e.g. bad data, server issue).
         const errorData = await response.json()
         throw new Error(errorData.detail || "Something went wrong saving this trade.")
@@ -88,7 +89,7 @@ async function handleTickerBlur() {
   if (!form.ticker || form.price_per_share !== "") return
 
   try {
-    const response = await fetch(`http://127.0.0.1:8000/stock/${form.ticker}`)
+    const response = await apiFetch(`/stock/${form.ticker}`)
     if (!response.ok) return // invalid ticker, or a graceful error — just leave price blank, no big deal
 
     const data = await response.json()
