@@ -11,6 +11,7 @@ function Dashboard({ refreshKey }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
+  const [accuracyPercent, setAccuracyPercent] = useState(null)
 
   useEffect(() => {
     setLoading(true)
@@ -29,6 +30,17 @@ function Dashboard({ refreshKey }) {
       })
   }, [refreshKey]) // re-fetch whenever a trade is logged, same pattern as before
 
+useEffect(() => {
+  apiFetch("/thesis-accuracy")
+    .then((response) => {
+      if (!response.ok) throw new Error("not available")
+      return response.json()
+    })
+    .then((result) => setAccuracyPercent(result.accuracy_percent))
+    .catch(() => setAccuracyPercent(null)) // supplementary stat - fail quietly, don't block the dashboard
+}, [refreshKey])
+
+
   // Three states, checked top to bottom, same pattern HoldingsTable used to
   // have - just centralized here now so children don't each need their own.
   if (loading) return <p style={{ color: "var(--color-text-secondary)" }}>Loading your dashboard...</p>
@@ -44,6 +56,7 @@ function Dashboard({ refreshKey }) {
         dayChangePercent={data.day_change_percent}
         positionCount={data.position_count}
         avgConviction={data.avg_conviction}
+        accuracyPercent={accuracyPercent}
       />
       <HoldingsTable holdings={data.holdings} />
     </div>
