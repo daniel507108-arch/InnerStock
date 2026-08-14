@@ -39,17 +39,12 @@ function Layout({ activeView, onNavigate, onLogout, children }) {
           <NavItem label="Log trade" active={activeView === "logtrade"} onClick={() => onNavigate("logtrade")} icon={<IconPlus size={16} />} />
           <NavItem label="Thesis review" active={activeView === "thesisreview"} onClick={() => onNavigate("thesisreview")} icon={<IconClock size={16} />} />
         </div>
-        <div style={{ display: "flex", gap: "4px" }}>
-  <NavItem label="Dashboard" active={activeView === "dashboard"} onClick={() => onNavigate("dashboard")} icon={<IconLayoutDashboard size={16} />} />
-  <NavItem label="Log trade" active={activeView === "logtrade"} onClick={() => onNavigate("logtrade")} icon={<IconPlus size={16} />} />
-  <NavItem label="Thesis review" active={activeView === "thesisreview"} onClick={() => onNavigate("thesisreview")} icon={<IconClock size={16} />} />
-</div>
-<button
-  onClick={onLogout}
-  style={{ background: "transparent", border: "1px solid var(--color-border-strong)", borderRadius: "var(--radius-sm)", padding: "0.3rem 0.7rem", color: "var(--color-text-secondary)", fontSize: "var(--text-sm)", cursor: "pointer" }}
->
-  Log out
-</button>
+        <button
+          onClick={onLogout}
+          style={{ background: "transparent", border: "1px solid var(--color-border-strong)", borderRadius: "var(--radius-sm)", padding: "0.3rem 0.7rem", color: "var(--color-text-secondary)", fontSize: "var(--text-sm)", cursor: "pointer" }}
+        >
+          Log out
+        </button>
       </nav>
       <main style={{ padding: "20px" }}>
         {children}
