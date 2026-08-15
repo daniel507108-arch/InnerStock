@@ -21,19 +21,29 @@ function App() {
   // user - this runs once on login/app load, and again after the survey
   // is submitted (via handleSurveyComplete below).
   useEffect(() => {
-    if (!token) {
-      setHasProfile(null)
-      return
-    }
+  if (!token) {
+    setHasProfile(null)
+    return
+  }
 
-    apiFetch("/profile")
-      .then((response) => {
-        setHasProfile(response.ok)
-      })
-      .catch(() => {
-        setHasProfile(false)
-      })
-  }, [token])
+  apiFetch("/profile")
+    .then((response) => {
+      if (response.status === 401) {
+        // Token is invalid or points to a user that no longer exists
+        // (e.g. after a database reset during testing) - treat this as
+        // "not actually logged in" rather than getting stuck showing
+        // the survey with a broken identity underneath it.
+        localStorage.removeItem("token")
+        setToken(null)
+        setHasProfile(null)
+        return
+      }
+      setHasProfile(response.ok)
+    })
+    .catch(() => {
+      setHasProfile(false)
+    })
+}, [token])
 
   function handleTradeLogged() {
     setRefreshKey((prev) => prev + 1)
