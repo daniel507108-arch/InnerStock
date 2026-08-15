@@ -12,6 +12,28 @@ class User(Base):
     hashed_password = Column(String, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
 
+class UserProfile(Base):
+    __tablename__ = "user_profiles"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+
+    # Required multiple-choice fields
+    risk_tolerance = Column(String, nullable=False)      # e.g. "low", "medium", "high"
+    investing_goals = Column(String, nullable=False)     # e.g. "growth", "income", "preservation", "speculation"
+    trading_style = Column(String, nullable=False)       # e.g. "buy_and_hold", "active", "swing"
+    time_horizon = Column(String, nullable=False)        # e.g. "under_1y", "1_to_5y", "5y_plus"
+    income_bracket = Column(String, nullable=False)      # e.g. "under_50k", "50k_100k", "100k_plus"
+    experience_level = Column(String, nullable=False)    # e.g. "beginner", "intermediate", "experienced"
+    sectors_of_interest = Column(String, nullable=False) # comma-separated, e.g. "tech,healthcare"
+
+    # Optional free-text field - nullable, never required, never crashes
+    # on empty submission.
+    biggest_fear = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, server_default=func.now())
+    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.now())
+    
 #THE TRADE OBJECT 
 class Trade(Base):
     __tablename__ = "trades"

@@ -16,7 +16,7 @@ from models import Trade
 # so FastAPI can validate it automatically before our code even runs
 from pydantic import BaseModel
 from datetime import date
-from models import Trade, PriceCache, User
+from models import Trade, PriceCache, User, UserProfile
 from datetime import date, datetime, timedelta
 
 #FOR THE CLAUDE API
@@ -40,6 +40,7 @@ load_dotenv()
 claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 from auth import hash_password, verify_password, create_access_token, decode_access_token
+from typing import List, Optional
 
 # Create the actual app instance. Everything below attaches to this "app" object.
 app = FastAPI()
@@ -111,6 +112,17 @@ class UserLogin(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class ProfileSubmit(BaseModel):
+    risk_tolerance: str
+    investing_goals: str
+    trading_style: str
+    time_horizon: str
+    income_bracket: str
+    experience_level: str
+    sectors_of_interest: List[str]
+    biggest_fear: Optional[str] = None  # truly optional - None is fine, empty string is fine
 
 # This is a "route" - it defines what happens when someone visits a specific URL.
 # @app.get("/") means: when someone visits the homepage using a GET request, run this function.
@@ -761,3 +773,62 @@ def login(payload: UserLogin, db: Session = Depends(get_db)):
 @app.get("/auth/me")
 def get_me(current_user: User = Depends(get_current_user)):
     return {"id": current_user.id, "name": current_user.name, "email": current_user.email}
+
+# Saves or updates the logged-in user's survey answers. Same endpoint
+# handles both the initial signup-survey submission and later edits from
+# a settings page, since it's just "does a profile row already exist?"
+@app.post("/profile")
+def submit_profile(payload: ProfileSubmit, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    existing = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
+
+    sectors_str = ",".join(payload.sectors_of_interest)
+
+    if existing:
+        existing.risk_tolerance = payload.risk_tolerance
+        existing.investing_goals = payload.investing_goals
+        existing.trading_style = payload.trading_style
+        existing.time_horizon = payload.time_horizon
+        existing.income_bracket = payload.income_bracket
+        existing.experience_level = payload.experience_level
+        existing.sectors_of_interest = sectors_str
+        existing.biggest_fear = payload.biggest_fear
+        db.commit()
+        db.refresh(existing)
+        return existing
+    else:
+        new_profile = UserProfile(
+            user_id=current_user.id,
+            risk_tolerance=payload.risk_tolerance,
+            investing_goals=payload.investing_goals,
+            trading_style=payload.trading_style,
+            time_horizon=payload.time_horizon,
+            income_bracket=payload.income_bracket,
+            experience_level=payload.experience_level,
+            sectors_of_interest=sectors_str,
+            biggest_fear=payload.biggest_fear,
+        )
+        db.add(new_profile)
+        db.commit()
+        db.refresh(new_profile)
+        return new_profile
+
+
+# Returns the logged-in user's profile, or a 404 if they haven't completed
+# the survey yet - the frontend uses this 404 as the signal to redirect to
+# the survey instead of the dashboard.
+@app.get("/profile")
+def get_profile(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    profile = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    return {
+        "risk_tolerance": profile.risk_tolerance,
+        "investing_goals": profile.investing_goals,
+        "trading_style": profile.trading_style,
+        "time_horizon": profile.time_horizon,
+        "income_bracket": profile.income_bracket,
+        "experience_level": profile.experience_level,
+        "sectors_of_interest": profile.sectors_of_interest.split(","),
+        "biggest_fear": profile.biggest_fear,
+    }
