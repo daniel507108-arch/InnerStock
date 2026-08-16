@@ -1,4 +1,4 @@
-import { IconLayoutDashboard, IconPlus, IconClock, IconChartBar } from "@tabler/icons-react"
+import { IconLayoutDashboard, IconPlus, IconClock, IconChartBar, IconMessageCircle } from "@tabler/icons-react"
 
 
 function NavItem({ label, active, onClick, icon }) {
@@ -38,6 +38,7 @@ function Layout({ activeView, onNavigate, onLogout, children }) {
           <NavItem label="Dashboard" active={activeView === "dashboard"} onClick={() => onNavigate("dashboard")} icon={<IconLayoutDashboard size={16} />} />
           <NavItem label="Log trade" active={activeView === "logtrade"} onClick={() => onNavigate("logtrade")} icon={<IconPlus size={16} />} />
           <NavItem label="Thesis review" active={activeView === "thesisreview"} onClick={() => onNavigate("thesisreview")} icon={<IconClock size={16} />} />
+          <NavItem label="Advisor" active={activeView === "advisor"} onClick={() => onNavigate("advisor")} icon={<IconMessageCircle size={16} />} />
         </div>
         <button
           onClick={onLogout}

@@ -6,6 +6,7 @@ import TradeForm from './components/TradeForm'
 import CsvUpload from './components/CsvUpload'
 import Dashboard from './components/Dashboard'
 import ThesisReview from './components/ThesisReview'
+import ChatScreen from './components/ChatScreen'
 import { apiFetch } from './api'
 
 function App() {
@@ -28,6 +29,16 @@ function App() {
 
     apiFetch("/profile")
       .then((response) => {
+        if (response.status === 401) {
+          // Token is invalid or points to a user that no longer exists
+          // (e.g. after a database reset during testing) - treat this as
+          // "not actually logged in" rather than getting stuck showing
+          // the survey with a broken identity underneath it.
+          localStorage.removeItem("token")
+          setToken(null)
+          setHasProfile(null)
+          return
+        }
         setHasProfile(response.ok)
       })
       .catch(() => {
@@ -86,6 +97,9 @@ function App() {
       )}
       {activeView === 'thesisreview' && (
         <ThesisReview />
+      )}
+      {activeView === 'advisor' && (
+        <ChatScreen />
       )}
     </Layout>
   )
