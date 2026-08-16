@@ -16,7 +16,7 @@ from models import Trade
 # so FastAPI can validate it automatically before our code even runs
 from pydantic import BaseModel
 from datetime import date
-from models import Trade, PriceCache, User, UserProfile
+from models import Trade, PriceCache, User, UserProfile, ChatMessage
 from datetime import date, datetime, timedelta
 
 #FOR THE CLAUDE API
@@ -832,3 +832,160 @@ def get_profile(db: Session = Depends(get_db), current_user: User = Depends(get_
         "sectors_of_interest": profile.sectors_of_interest.split(","),
         "biggest_fear": profile.biggest_fear,
     }
+
+class ChatMessageIn(BaseModel):
+    message: str
+
+# Gathers everything the advisor needs to answer grounded, personalized
+# questions: the user's stated profile, current holdings, trading-pattern
+# stats, and a sample of recent trades with their theses. Rebuilt fresh on
+# every message, since holdings and patterns can change between questions.
+def build_advisor_context(db: Session, current_user: User) -> str:
+    profile = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
+    holdings_data = get_holdings(db=db, current_user=current_user)
+    patterns_data = get_trading_patterns(db=db, current_user=current_user)
+
+    recent_trades = (
+        db.query(Trade)
+        .filter(Trade.user_id == current_user.id)
+        .order_by(Trade.trade_date.desc())
+        .limit(10)
+        .all()
+    )
+
+    profile_summary = "No profile on file." if not profile else f"""
+Risk tolerance: {profile.risk_tolerance}
+Investing goals: {profile.investing_goals}
+Trading style: {profile.trading_style}
+Time horizon: {profile.time_horizon}
+Income bracket: {profile.income_bracket}
+Experience level: {profile.experience_level}
+Sectors of interest: {profile.sectors_of_interest}
+Stated fear/mistake: {profile.biggest_fear or "not provided"}
+"""
+
+    holdings_summary = "\n".join(
+        f"- {h['ticker']}: {h['shares']} shares, {h['percentage']}% of portfolio, "
+        f"{'OVERWEIGHT' if h['overweight_flag'] else 'within limits'}, "
+        f"all-time gain/loss {h['total_gain_loss_percent']}%"
+        for h in holdings_data["holdings"]
+    ) or "No current holdings."
+
+    trades_summary = "\n".join(
+        f"- {t.trade_date} {t.action.upper()} {t.ticker}: conviction {t.conviction_score}/5, "
+        f"thesis: \"{t.thesis_text}\", outcome: {t.outcome_tag or 'not yet reviewed'}"
+        for t in recent_trades
+    ) or "No trades logged yet."
+
+    patterns_summary = f"""
+Reviewed trades: {patterns_data['reviewed_count']}, pending review: {patterns_data['pending_count']}
+By conviction score: {patterns_data['by_conviction']}
+FOMO-flagged trades correct rate: {patterns_data['fomo_vs_non_fomo']['fomo']['correct_rate']}%
+Non-FOMO trades correct rate: {patterns_data['fomo_vs_non_fomo']['non_fomo']['correct_rate']}%
+"""
+
+    return f"""You are InnerStock's investing advisor. Answer the user's questions using
+the real data below about who they are and how they actually invest. Be specific and
+reference their actual numbers where relevant. Do not give generic advice - ground
+every answer in the data provided. You are not a licensed financial advisor; make
+that clear if the user asks for concrete buy/sell recommendations.
+
+=== USER PROFILE ===
+{profile_summary}
+
+=== CURRENT HOLDINGS ===
+{holdings_summary}
+Total portfolio value: ${holdings_data['total_value']:.2f}
+Average conviction across positions: {holdings_data['avg_conviction']}/5
+
+=== RECENT TRADES ===
+{trades_summary}
+
+=== BEHAVIORAL PATTERNS ===
+{patterns_summary}
+"""
+
+# The advisor chat. Saves the user's message, rebuilds full context fresh,
+# sends the conversation history + context to Claude, saves and returns
+# the reply. PROTECTED + SCOPED - only ever sees and stores this user's
+# own data and conversation.
+@app.post("/chat")
+def chat(payload: ChatMessageIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    # Save the user's new message first - stored immediately, before we
+    # even talk to Claude, so it's never lost even if something below fails.
+    user_message = ChatMessage(user_id=current_user.id, role="user", content=payload.message)
+    db.add(user_message)
+    db.commit()
+
+    # Pull recent conversation history (capped at 40, to avoid unbounded
+    # token growth as a conversation gets long) so Claude has continuity
+    # across turns - this is what gives the chatbot "memory."
+    history = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.user_id == current_user.id)
+        .order_by(ChatMessage.created_at.asc())
+        .limit(40)
+        .all()
+    )
+
+    # Rebuilt fresh every message (not cached) since holdings/stats can
+    # change mid-conversation, e.g. if the user logs a new trade while chatting.
+    context = build_advisor_context(db, current_user)
+
+    # Reshape DB rows into the plain {role, content} format Claude's API
+    # expects - strips out fields like id/created_at that Claude doesn't need.
+    messages = [{"role": m.role, "content": m.content} for m in history]
+
+    try:
+        response = claude_client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=600,
+            system=context,       # background knowledge - invisible to the
+                                   # user, shapes every answer without being
+                                   # part of the visible conversation
+            messages=messages,    # the actual back-and-forth, including
+                                   # the new message just saved above
+        )
+        reply_text = response.content[0].text
+
+        # Log real token usage and estimated cost for this call, so actual
+        # spend can be tracked during testing instead of guessed at.
+        input_tokens = response.usage.input_tokens
+        output_tokens = response.usage.output_tokens
+        input_cost = (input_tokens / 1_000_000) * 1.00
+        output_cost = (output_tokens / 1_000_000) * 5.00
+        total_cost = input_cost + output_cost
+        print(
+            f"[chat cost] user_id={current_user.id} "
+            f"input_tokens={input_tokens} output_tokens={output_tokens} "
+            f"estimated_cost=${total_cost:.5f}"
+        )
+
+    except Exception as e:
+        print(f"Claude API call failed for chat: {e}")
+        raise HTTPException(status_code=500, detail="Could not generate a response right now")
+
+    # Save Claude's reply too, tagged as "assistant" - this is what makes
+    # it show up in history the NEXT time this function runs, which is how
+    # the conversation actually persists and grows over time.
+    assistant_message = ChatMessage(user_id=current_user.id, role="assistant", content=reply_text)
+    db.add(assistant_message)
+    db.commit()
+
+    # Frontend only needs the new reply here - it already has (or can
+    # separately fetch) everything that came before.
+    return {"reply": reply_text}
+
+
+# Returns the full saved conversation for the logged-in user - no Claude
+# call here at all, just reading back what's already stored. Used when the
+# chat screen first loads, to show past messages from earlier sessions.
+@app.get("/chat/history")
+def get_chat_history(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    messages = (
+        db.query(ChatMessage)
+        .filter(ChatMessage.user_id == current_user.id)
+        .order_by(ChatMessage.created_at.asc())
+        .all()
+    )
+    return {"messages": [{"role": m.role, "content": m.content} for m in messages]}

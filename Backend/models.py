@@ -62,3 +62,12 @@ class PriceCache(Base):
     pe_ratio = Column(Numeric, nullable=True)
     sector = Column(String, nullable=True)
     last_updated = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+class ChatMessage(Base):
+    __tablename__ = "chat_messages"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    role = Column(String, nullable=False)     # "user" or "assistant"
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())
