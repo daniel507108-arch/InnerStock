@@ -45,9 +45,9 @@ class Trade(Base):
     quantity = Column(Numeric, nullable=False)
     price_per_share = Column(Numeric, nullable=False)
     trade_date = Column(Date, nullable=False)
-    thesis_text = Column(Text, nullable=False)
-    conviction_score = Column(Integer, nullable=False)   # 1-5
-    review_date = Column(Date, nullable=False)
+    thesis_text = Column(Text, nullable=True)
+    conviction_score = Column(Integer, nullable=True)   # 1-5
+    review_date = Column(Date, nullable=True)
     outcome_tag = Column(String, nullable=True)       # stays empty until resurfaced & graded
     created_at = Column(DateTime, server_default=func.now())
 

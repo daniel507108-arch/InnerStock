@@ -106,7 +106,7 @@ function HoldingsTable({ holdings }) {
     <>
       <tr key={h.ticker}>
         <td>{h.ticker}</td>
-        <td>{h.shares}</td>
+        <td>{h.shares.toFixed(4)}</td>
         <td>${h.avg_cost.toFixed(2)}</td>
         <td>${h.current_price.toFixed(2)}</td>
         <td style={{ color: activeGainLoss >= 0 ? "var(--color-success)" : "var(--color-danger)" }}>
