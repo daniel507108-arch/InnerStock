@@ -1,88 +1,18 @@
 import { useState, useEffect } from "react"
 import { apiFetch } from "../api"
-import { IconBolt, IconClock } from "@tabler/icons-react"
+import { IconBolt } from "@tabler/icons-react"
 
+// Unchanged in behavior, restyled with .conviction-dots/.dot instead of
+// inline style objects per-dot.
 function ConvictionDots({ score }) {
   return (
-    <span style={{ display: "inline-flex", gap: "3px" }}>
+    <span className="conviction-dots">
       {[1, 2, 3, 4, 5].map((i) => (
-        <span
-          key={i}
-          style={{
-            width: "6px",
-            height: "6px",
-            borderRadius: "50%",
-            display: "inline-block",
-            background: i <= score ? "var(--color-text-primary)" : "transparent",
-            border: i <= score ? "none" : "1px solid var(--color-border-strong)",
-          }}
-        />
+        <span key={i} className={`dot${i <= score ? " filled" : ""}`} />
       ))}
     </span>
   )
 }
-
-function ThesisReview() {
-  const [reviews, setReviews] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState(null)
-
-  // Tracks which specific trade is mid-submit, so we can disable just
-  // that row's buttons instead of freezing the whole list.
-  const [submittingId, setSubmittingId] = useState(null)
-  const [recentReviews, setRecentReviews] = useState([])
-  const [recentRefreshKey, setRecentRefreshKey] = useState(0)
-
-  useEffect(() => {
-    apiFetch("/thesis-reviews")
-      .then(response => {
-        if (!response.ok) throw new Error("Thesis review endpoint not available yet")
-        return response.json()
-      })
-      .then(data => {
-        setReviews(data.reviews)
-        setLoading(false)
-      })
-      .catch(err => {
-        setError(err.message)
-        setLoading(false)
-      })
-  }, [])
-
-useEffect(() => {
-  apiFetch("/thesis-reviews/recent")
-    .then(response => {
-      if (!response.ok) throw new Error("not available")
-      return response.json()
-    })
-    .then(data => setRecentReviews(data.reviews))
-    .catch(() => setRecentReviews([]))
-}, [recentRefreshKey])
-
-  async function handleOutcome(tradeId, outcome) {
-    setSubmittingId(tradeId)
-    try {
-      const response = await apiFetch(`/trades/${tradeId}/outcome`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ outcome_tag: outcome }),
-      })
-      if (!response.ok) throw new Error("Failed to save outcome")
-
-      // Remove this trade from the visible list — it's been reviewed,
-      // no need to re-fetch the whole list just to drop one item.
-      setReviews((prev) => prev.filter((r) => r.id !== tradeId))
-      setRecentRefreshKey((prev) => prev + 1)
-    } catch (err) {
-      alert(`Couldn't save outcome: ${err.message}`) // simple, temporary feedback
-    } finally {
-      setSubmittingId(null)
-    }
-  }
-
-  if (loading) return <p style={{ color: "var(--color-text-secondary)" }}>Loading thesis reviews...</p>
-if (error) return <p style={{ color: "var(--color-danger)" }}>Thesis review unavailable: {error}</p>
-if (reviews.length === 0) return <p style={{ color: "var(--color-text-secondary)" }}>Nothing due for review yet.</p>
 
 function getDueStatus(reviewDate) {
   const today = new Date()
@@ -92,93 +22,205 @@ function getDueStatus(reviewDate) {
 
   const diffDays = Math.round((today - due) / (1000 * 60 * 60 * 24))
 
-  if (diffDays === 0) return { text: "Due today", color: "var(--color-warning)" }
-  if (diffDays > 0) return { text: `${diffDays} day${diffDays === 1 ? "" : "s"} overdue`, color: "var(--color-danger)" }
-  return { text: "Not yet due", color: "var(--color-text-secondary)" }
+  if (diffDays === 0) return { text: "Due today", pillClass: "pill-warning" }
+  if (diffDays > 0) return { text: `${diffDays} day${diffDays === 1 ? "" : "s"} overdue`, pillClass: "pill-danger" }
+  return { text: "Not yet due", pillClass: "pill-muted" }
 }
 
+function ThesisReview() {
+  const [reviews, setReviews] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const [submittingId, setSubmittingId] = useState(null)
+  const [recentReviews, setRecentReviews] = useState([])
+  const [recentRefreshKey, setRecentRefreshKey] = useState(0)
+
+  // NEW — one optional notes draft per pending trade, keyed by trade id.
+  // A plain object instead of separate useState calls because the number
+  // of pending reviews is dynamic (however many trades are due), so there's
+  // no fixed set of fields to declare ahead of time the way TradeForm can.
+  const [notesDraft, setNotesDraft] = useState({})
+
+  useEffect(() => {
+    apiFetch("/thesis-reviews")
+      .then((response) => {
+        if (!response.ok) throw new Error("Thesis review endpoint not available yet")
+        return response.json()
+      })
+      .then((data) => {
+        setReviews(data.reviews)
+        setLoading(false)
+      })
+      .catch((err) => {
+        setError(err.message)
+        setLoading(false)
+      })
+  }, [])
+
+  useEffect(() => {
+    apiFetch("/thesis-reviews/recent")
+      .then((response) => {
+        if (!response.ok) throw new Error("not available")
+        return response.json()
+      })
+      .then((data) => setRecentReviews(data.reviews))
+      .catch(() => setRecentReviews([]))
+  }, [recentRefreshKey])
+
+  async function handleOutcome(tradeId, outcome) {
+    setSubmittingId(tradeId)
+    try {
+      const response = await apiFetch(`/trades/${tradeId}/outcome`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        // review_notes is optional on the backend (nullable column) — send
+        // whatever's in the draft, or null if the user left it blank. Never
+        // send an empty string; null is the unambiguous "no note" value.
+        body: JSON.stringify({
+          outcome_tag: outcome,
+          review_notes: notesDraft[tradeId]?.trim() || null,
+        }),
+      })
+      if (!response.ok) throw new Error("Failed to save outcome")
+
+      setReviews((prev) => prev.filter((r) => r.id !== tradeId))
+      setNotesDraft((prev) => {
+        const next = { ...prev }
+        delete next[tradeId]
+        return next
+      })
+      setRecentRefreshKey((prev) => prev + 1)
+    } catch (err) {
+      alert(`Couldn't save outcome: ${err.message}`)
+    } finally {
+      setSubmittingId(null)
+    }
+  }
+
+  if (loading) return <p style={{ color: "var(--color-text-secondary)" }}>Loading thesis reviews...</p>
+  if (error) return <p style={{ color: "var(--color-danger)" }}>Thesis review unavailable: {error}</p>
+
+  const topbar = (
+    <div className="topbar">
+      <div>
+        <h1>Thesis review</h1>
+        <div className="sub">Grade past theses to build your accuracy record</div>
+      </div>
+    </div>
+  )
+
   return (
-    <div style={{ background: "var(--color-surface)", padding: "16px", borderRadius: "var(--radius-md)" }}>
-      <h3 style={{ marginTop: 0, fontSize: "var(--text-lg)", fontWeight: "var(--font-weight-medium)", color: "var(--color-text-primary)" }}>Thesis review</h3>
-<p style={{ fontSize: "var(--text-sm)", color: "var(--color-text-secondary)", display: "flex", alignItems: "center", gap: "6px", marginBottom: "var(--space-md)" }}>
-  <IconClock size={15} /> {reviews.length} thesis{reviews.length === 1 ? "" : "es"} due for review
-</p>
-      {reviews.map((r) => (
-  <div key={r.id} style={{ border: "1px solid var(--color-border)", borderRadius: "var(--radius-sm)", padding: "var(--space-md)", marginBottom: "var(--space-md)", background: "var(--color-surface-alt)" }}>
+    <>
+      {topbar}
+      <div className="content">
+        {reviews.length === 0 ? (
+          <p style={{ color: "var(--color-text-secondary)" }}>Nothing due for review yet.</p>
+        ) : (
+          <>
+            <div className="section-title">
+              Due now ({reviews.length})
+            </div>
 
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-        <strong style={{ color: "var(--color-text-primary)", fontWeight: "var(--font-weight-medium)" }}>{r.ticker}</strong>
-        <span style={{ background: "var(--color-surface)", color: "var(--color-text-secondary)", fontSize: "var(--text-xs)", padding: "2px 8px", borderRadius: "999px", textTransform: "capitalize" }}>
-          {r.action}
-        </span>
+            {reviews.map((r) => {
+              const due = getDueStatus(r.review_date)
+              const isSubmitting = submittingId === r.id
+
+              return (
+                <div key={r.id} className="review-card">
+                  <div className="review-top">
+                    <div className="review-ticker">
+                      <div className="ticker-badge">{r.ticker.slice(0, 2)}</div>
+                      <div>
+                        <span className="ticker-name">{r.ticker}</span>
+                        <span className="pill pill-muted" style={{ marginLeft: "6px" }}>{r.action}</span>
+                      </div>
+                    </div>
+                    <span className={`pill ${due.pillClass}`}>{due.text}</span>
+                  </div>
+
+                  <div className="thesis-quote">"{r.thesis_text}"</div>
+
+                  <div className="review-meta">
+                    <span>Conviction</span>
+                    <ConvictionDots score={r.conviction_score} />
+                    <span>Traded {r.trade_date}</span>
+                  </div>
+
+                  {r.fomo_flag && (
+                    <div className="fomo-line">
+                      <IconBolt size={13} /> {r.fomo_reason}
+                    </div>
+                  )}
+
+                  {/* NEW — optional reflection notes, saved alongside whichever
+                      grade button gets clicked. Reuses .field/.field textarea
+                      from theme.css (same serif treatment as the trade thesis
+                      textarea) rather than inventing a new input style — this
+                      is the same kind of reflective content, just written
+                      after the fact instead of at trade time. */}
+                  <div className="field" style={{ marginTop: "var(--space-md)", marginBottom: 0 }}>
+                    <label>Notes (optional) — what were you thinking? What actually happened?</label>
+                    <textarea
+                      value={notesDraft[r.id] || ""}
+                      onChange={(e) => setNotesDraft((prev) => ({ ...prev, [r.id]: e.target.value }))}
+                      placeholder="e.g. Held longer than planned because earnings got pushed back a week..."
+                      style={{ minHeight: "70px" }}
+                    />
+                  </div>
+
+                  <div className="grade-row">
+                    {["correct", "incorrect", "mixed"].map((outcome) => (
+                      <button
+                        key={outcome}
+                        disabled={isSubmitting}
+                        onClick={() => handleOutcome(r.id, outcome)}
+                        className={`grade-btn ${outcome}`}
+                      >
+                        {outcome.charAt(0).toUpperCase() + outcome.slice(1)}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </>
+        )}
+
+        {recentReviews.length > 0 && (
+          <>
+            <div className="section-title">Recently reviewed</div>
+            <div className="card" style={{ padding: "0 var(--space-lg)" }}>
+              {recentReviews.map((r) => {
+                const pillClass =
+                  r.outcome_tag === "correct" ? "pill-success" :
+                  r.outcome_tag === "incorrect" ? "pill-danger" :
+                  "pill-warning"
+
+                return (
+                  <div key={r.id} className="recent-row">
+                    <div>
+                      <span className="ticker-name">{r.ticker}</span>{" "}
+                      <span style={{ color: "var(--color-text-muted)" }}>"{r.thesis_text}"</span>
+                      {/* NEW — shows the saved note, if one was left, so
+                          "what was I thinking" is answerable at a glance
+                          without re-opening the original trade. */}
+                      {r.review_notes && <div className="recent-note">{r.review_notes}</div>}
+                    </div>
+                    <span className={`pill ${pillClass}`}>{r.outcome_tag}</span>
+                  </div>
+                )
+              })}
+            </div>
+          </>
+        )}
+
+        {reviews.length === 0 && recentReviews.length === 0 && (
+          <p style={{ color: "var(--color-text-secondary)" }}>
+            No theses reviewed yet — grade one once its review date arrives.
+          </p>
+        )}
       </div>
-      <span style={{ fontSize: "var(--text-sm)", color: "var(--color-text-secondary)" }}>Traded {r.trade_date}</span>
-    </div>
-
-    <p style={{ fontStyle: "italic", color: "var(--color-text-primary)" }}>"{r.thesis_text}"</p>
-
-    {r.fomo_flag && (
-      <p style={{ color: "var(--color-warning)", fontSize: "var(--text-sm)", display: "flex", alignItems: "center", gap: "6px" }}>
-        <IconBolt size={15} /> {r.fomo_reason}
-      </p>
-    )}
-
-    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--space-sm)" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-        <span style={{ fontSize: "var(--text-sm)", color: "var(--color-text-secondary)" }}>Conviction at the time</span>
-        <ConvictionDots score={r.conviction_score} />
-      </div>
-      <span style={{ fontSize: "var(--text-sm)", color: getDueStatus(r.review_date).color }}>
-        {getDueStatus(r.review_date).text}
-      </span>
-    </div>
-
-    <div style={{ display: "flex", gap: "8px" }}>
-      {["correct", "incorrect", "mixed"].map((outcome) => (
-        <button
-          key={outcome}
-          disabled={submittingId === r.id}
-          onClick={() => handleOutcome(r.id, outcome)}
-          style={{ background: "transparent", color: "var(--color-text-primary)", border: "1px solid var(--color-border-strong)", borderRadius: "var(--radius-sm)", padding: "0.4rem 0.8rem", flex: 1, cursor: submittingId === r.id ? "default" : "pointer", opacity: submittingId === r.id ? 0.5 : 1 }}
-        >
-          {outcome.charAt(0).toUpperCase() + outcome.slice(1)}
-        </button>
-      ))}
-    </div>
-  </div>
-))}
-
-{recentReviews.length > 0 && (
-  <div>
-    <p style={{ fontSize: "var(--text-sm)", color: "var(--color-text-secondary)", marginBottom: "var(--space-sm)" }}>
-      Recently reviewed
-    </p>
-    {recentReviews.map((r) => {
-      const outcomeColor =
-        r.outcome_tag === "correct" ? "var(--color-success)" :
-        r.outcome_tag === "incorrect" ? "var(--color-danger)" :
-        "var(--color-warning)"
-      const outcomeBg =
-        r.outcome_tag === "correct" ? "var(--color-success-bg)" :
-        r.outcome_tag === "incorrect" ? "var(--color-danger-bg)" :
-        "var(--color-warning-bg)"
-      return (
-        <div key={r.id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0.6rem 0.8rem", borderRadius: "var(--radius-sm)", background: "var(--color-surface)", marginBottom: "0.4rem" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            <strong style={{ fontSize: "var(--text-sm)" }}>{r.ticker}</strong>
-            <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>"{r.thesis_text}"</span>
-          </div>
-          <span style={{ background: outcomeBg, color: outcomeColor, fontSize: "var(--text-xs)", padding: "2px 8px", borderRadius: "999px", textTransform: "capitalize" }}>
-            {r.outcome_tag}
-          </span>
-        </div>
-      )
-    })}
-  </div>
-)}
-
-    </div>
+    </>
   )
 }
 

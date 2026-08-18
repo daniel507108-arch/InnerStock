@@ -1,9 +1,14 @@
 import { useState } from "react"
 import { apiFetch } from "../api"
 
+// All the state, validation, and submit logic below is UNCHANGED from the
+// current version — same fields, same validate() rules, same handleSubmit
+// flow, same handleTickerBlur auto-price-fill behavior. This pass only
+// changes what gets returned at the bottom: a plain stacked <form> becomes
+// the mockup's two-card layout ("The trade" mechanics + "Your reasoning"),
+// and the raw <select>/<input type="number"> controls for action and
+// conviction become tappable button rows.
 function TradeForm({ onTradeLogged }) {
-  // One object holding every field in the form, instead of a separate
-  // useState for each — easier to manage as the form grows.
   const [form, setForm] = useState({
     ticker: "",
     action: "buy",
@@ -15,21 +20,25 @@ function TradeForm({ onTradeLogged }) {
     review_date: "",
   })
 
-  // Tracks whether the last submit attempt succeeded, failed, or hasn't happened yet.
-  // null = no attempt yet, "success" = it worked, "error" = something went wrong.
   const [status, setStatus] = useState(null)
   const [errorMessage, setErrorMessage] = useState("")
 
-  // Runs on every keystroke, for every input — reused across all fields.
-  // e.target.name tells us WHICH field changed, e.target.value is its new value.
   function handleChange(e) {
     const { name, value } = e.target
     setForm((prev) => ({ ...prev, [name]: value }))
-    // ...prev copies every other field as-is; [name]: value overwrites just this one
   }
 
-  // Checks the form's contents BEFORE sending anything to the backend.
-  // Returns null if everything looks fine, or a string describing the first problem found.
+  // New — replaces the old <select name="action">. Same effect (writes
+  // "buy" or "sell" into form.action), just triggered by clicking one of
+  // the two toggle buttons instead of picking from a dropdown.
+  function handleActionClick(action) {
+    setForm((prev) => ({ ...prev, action }))
+  }
+
+  function handleConvictionClick(score) {
+    setForm((prev) => ({ ...prev, conviction_score: score }))
+  }
+
   function validate() {
     if (!form.ticker.trim()) return "Ticker is required."
     if (!form.quantity || Number(form.quantity) <= 0) return "Quantity must be greater than 0."
@@ -41,136 +50,157 @@ function TradeForm({ onTradeLogged }) {
     return null
   }
 
-  // Runs when the form is submitted (button click OR pressing Enter in a field).
   async function handleSubmit(e) {
-    e.preventDefault() // <-- this is the line that stops the page-reset behavior
+    e.preventDefault()
 
     const validationError = validate()
     if (validationError) {
-      // Stop here if validation fails — never even attempt the network request.
       setStatus("error")
       setErrorMessage(validationError)
       return
     }
 
     try {
-  // Send the form data to the backend as JSON.
-  const response = await apiFetch("/trades", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(form),
-  })
+      const response = await apiFetch("/trades", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      })
 
-  if (!response.ok) {
-        // The backend responded, but with an error (e.g. bad data, server issue).
+      if (!response.ok) {
         const errorData = await response.json()
         throw new Error(errorData.detail || "Something went wrong saving this trade.")
       }
 
-      // Success — clear the form so it's ready for the next trade.
       setStatus("success")
       setErrorMessage("")
       setForm({
         ticker: "", action: "buy", quantity: "", price_per_share: "",
         trade_date: "", thesis_text: "", conviction_score: 3, review_date: "",
       })
-      onTradeLogged() // tell App.jsx a trade was just logged
+      onTradeLogged()
     } catch (err) {
-      // Covers both backend errors above AND total failures (backend not running, network issue).
       setStatus("error")
       setErrorMessage(err.message)
     }
   }
- const labelStyle = { display: "flex", flexDirection: "column", gap: "0.25rem", fontSize: "var(--text-sm)", color: "var(--color-text-secondary)" }
 
-async function handleTickerBlur() {
-  // Don't bother if there's no ticker typed, or if the user already
-  // manually entered a price — never overwrite something they typed themselves.
-  if (!form.ticker || form.price_per_share !== "") return
+  async function handleTickerBlur() {
+    if (!form.ticker || form.price_per_share !== "") return
 
-  try {
-    const response = await apiFetch(`/stock/${form.ticker}`)
-    if (!response.ok) return // invalid ticker, or a graceful error — just leave price blank, no big deal
+    try {
+      const response = await apiFetch(`/stock/${form.ticker}`)
+      if (!response.ok) return
 
-    const data = await response.json()
-    if (data.price) {
-      setForm((prev) => ({ ...prev, price_per_share: data.price }))
+      const data = await response.json()
+      if (data.price) {
+        setForm((prev) => ({ ...prev, price_per_share: data.price }))
+      }
+    } catch (err) {
+      // Convenience feature — fails silently, user can type the price manually.
     }
-  } catch (err) {
-    // A convenience feature failing shouldn't interrupt the user —
-    // fail silently, they can just type the price manually.
   }
-}
 
-function handleConvictionClick(score) {
-  setForm((prev) => ({ ...prev, conviction_score: score }))
-}
+  return (
+    <form onSubmit={handleSubmit}>
+      {/* .trade-grid (theme.css) is a 2-column grid: mechanics card on the
+          left, reasoning card on the right, matching the mockup 1:1. Both
+          cards sit inside the SAME <form>, so one submit button below
+          covers both halves — splitting them visually doesn't require
+          splitting them functionally. */}
+      <div className="trade-grid">
+        <div className="trade-card">
+          <h3>The trade</h3>
 
- return (
-  <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: "var(--space-xs)", maxWidth: "320px", background: "var(--color-surface)", padding: "var(--space-md)", borderRadius: "var(--radius-md)" }}>
-    <label style={labelStyle}>
-      Ticker
-      <input name="ticker" value={form.ticker} onChange={(e) => setForm((prev) => ({ ...prev, ticker: e.target.value.toUpperCase() }))} onBlur={handleTickerBlur} placeholder="e.g. AAPL"
-      />
-    </label>
+          <div className="field">
+            <label>Ticker</label>
+            <input
+              name="ticker"
+              value={form.ticker}
+              onChange={(e) => setForm((prev) => ({ ...prev, ticker: e.target.value.toUpperCase() }))}
+              onBlur={handleTickerBlur}
+              placeholder="e.g. AAPL"
+            />
+          </div>
 
-    <label style={labelStyle}>
-      Buy or Sell
-      <select name="action" value={form.action} onChange={handleChange}>
-        <option value="buy">Buy</option>
-        <option value="sell">Sell</option>
-      </select>
-    </label>
+          <div className="field">
+            <label>Action</label>
+            <div className="action-toggle">
+              <button
+                type="button"
+                className={`buy${form.action === "buy" ? " active" : ""}`}
+                onClick={() => handleActionClick("buy")}
+              >
+                Buy
+              </button>
+              <button
+                type="button"
+                className={`sell${form.action === "sell" ? " active" : ""}`}
+                onClick={() => handleActionClick("sell")}
+              >
+                Sell
+              </button>
+            </div>
+          </div>
 
-    <label style={labelStyle}>
-      Quantity
-      <input name="quantity" type="number" value={form.quantity} onChange={handleChange} />
-    </label>
+          <div className="row-2">
+            <div className="field">
+              <label>Quantity</label>
+              <input name="quantity" type="number" value={form.quantity} onChange={handleChange} />
+            </div>
+            <div className="field">
+              <label>Price / share</label>
+              <input name="price_per_share" type="number" value={form.price_per_share} onChange={handleChange} />
+            </div>
+          </div>
 
-    <label style={labelStyle}>
-      Price per Share
-      <input name="price_per_share" type="number" value={form.price_per_share} onChange={handleChange} />
-    </label>
+          <div className="row-2">
+            <div className="field">
+              <label>Trade date</label>
+              <input name="trade_date" type="date" value={form.trade_date} onChange={handleChange} />
+            </div>
+            <div className="field">
+              <label>Review date</label>
+              <input name="review_date" type="date" value={form.review_date} onChange={handleChange} />
+            </div>
+          </div>
+        </div>
 
-    <label style={labelStyle}>
-      Trade Date
-      <input name="trade_date" type="date" value={form.trade_date} onChange={handleChange} />
-    </label>
+        <div className="trade-card reasoning-card">
+          <div className="reasoning-prompt">What's your reasoning?</div>
 
-    <label style={labelStyle}>
-      Your Thesis (why are you making this trade?)
-      <textarea name="thesis_text" value={form.thesis_text} onChange={handleChange} />
-    </label>
+          <div className="field">
+            <textarea name="thesis_text" value={form.thesis_text} onChange={handleChange} />
+          </div>
 
-    <label style={labelStyle}>
-      Conviction Score (1–5)
-      <input name="conviction_score" type="number" min="1" max="5" value={form.conviction_score} onChange={handleChange} />
-    </label>
+          <div className="field">
+            <label>Conviction</label>
+            <div className="conviction-row">
+              {[1, 2, 3, 4, 5].map((score) => (
+                <button
+                  key={score}
+                  type="button"
+                  className={`conviction-btn${form.conviction_score === score ? " active" : ""}`}
+                  onClick={() => handleConvictionClick(score)}
+                >
+                  {score}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
 
-    <label style={labelStyle}>
-      Review Date (when should this thesis be revisited?)
-      <input name="review_date" type="date" value={form.review_date} onChange={handleChange} />
-    </label>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "var(--space-lg)" }}>
+        <button type="submit" className="btn btn-primary">
+          Save trade
+        </button>
+      </div>
 
-    <button
-      type="submit"
-      style={{
-        background: "var(--color-fill-primary)",
-        color: "var(--color-on-primary)",
-        border: "none",
-        borderRadius: "var(--radius-sm)",
-        padding: "0.5rem",
-        fontWeight: 500,
-        cursor: "pointer",
-      }}
-  >
-    Log trade
-  </button>
-
-    {status === "success" && <p style={{ color: "var(--color-success)" }}>Trade logged successfully.</p>}
-    {status === "error" && <p style={{ color: "var(--color-danger)" }}>{errorMessage}</p>}
-  </form>
-)
+      {status === "success" && <p style={{ color: "var(--color-success)" }}>Trade logged successfully.</p>}
+      {status === "error" && <p style={{ color: "var(--color-danger)" }}>{errorMessage}</p>}
+    </form>
+  )
 }
 
 export default TradeForm

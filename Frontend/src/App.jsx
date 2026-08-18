@@ -87,14 +87,22 @@ function App() {
   return (
     <Layout activeView={activeView} onNavigate={setActiveView} onLogout={handleLogout}>
       {activeView === 'dashboard' && (
-        <Dashboard refreshKey={refreshKey} />
-      )}
+  <Dashboard refreshKey={refreshKey} onNavigate={setActiveView} />
+)}
       {activeView === 'logtrade' && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-lg)", maxWidth: "440px", margin: "0 auto" }}>
-          <TradeForm onTradeLogged={handleTradeLogged} />
-          <CsvUpload onTradeLogged={handleTradeLogged} />
-        </div>
-      )}
+  <>
+    <div className="topbar">
+      <div>
+        <h1>Log a trade</h1>
+        <div className="sub">Every trade needs a thesis — no exceptions</div>
+      </div>
+    </div>
+    <div className="content">
+      <TradeForm onTradeLogged={handleTradeLogged} />
+      <CsvUpload onTradeLogged={handleTradeLogged} />
+    </div>
+  </>
+)}
       {activeView === 'thesisreview' && (
         <ThesisReview />
       )}
