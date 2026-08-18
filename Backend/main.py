@@ -179,6 +179,14 @@ def get_or_fetch_price(ticker: str, db: Session):
     market_cap = info.get("marketCap")
     pe_ratio = info.get("trailingPE")
     sector = info.get("sector")
+    # NEW - fundamentals for the advisor chat. Same info dict already
+    # fetched above, just reading more keys out of it - no extra API call.
+    forward_pe = info.get("forwardPE")
+    price_to_book = info.get("priceToBook")
+    profit_margins = info.get("profitMargins")
+    revenue_growth = info.get("revenueGrowth")
+    debt_to_equity = info.get("debtToEquity")
+    dividend_yield = info.get("dividendYield")
 
     if cached:
         cached.current_price = price
@@ -186,6 +194,12 @@ def get_or_fetch_price(ticker: str, db: Session):
         cached.market_cap = market_cap
         cached.pe_ratio = pe_ratio
         cached.sector = sector
+        cached.forward_pe = forward_pe
+        cached.price_to_book = price_to_book
+        cached.profit_margins = profit_margins
+        cached.revenue_growth = revenue_growth
+        cached.debt_to_equity = debt_to_equity
+        cached.dividend_yield = dividend_yield
         cached.last_updated = datetime.utcnow()
     else:
         cached = PriceCache(
@@ -195,6 +209,12 @@ def get_or_fetch_price(ticker: str, db: Session):
             market_cap=market_cap,
             pe_ratio=pe_ratio,
             sector=sector,
+            forward_pe=forward_pe,
+            price_to_book=price_to_book,
+            profit_margins=profit_margins,
+            revenue_growth=revenue_growth,
+            debt_to_equity=debt_to_equity,
+            dividend_yield=dividend_yield,
             last_updated=datetime.utcnow()
         )
         db.add(cached)
@@ -933,6 +953,36 @@ FOMO-flagged trades correct rate: {patterns_data['fomo_vs_non_fomo']['fomo']['co
 Non-FOMO trades correct rate: {patterns_data['fomo_vs_non_fomo']['non_fomo']['correct_rate']}%
 """
 
+    # NEW - per-holding fundamentals, so the advisor can reason about
+    # valuation/quality (P/E, margins, growth) instead of just price and
+    # gain/loss. Reads straight from PriceCache, which get_holdings() above
+    # already populated a moment ago via get_or_fetch_price() for every
+    # ticker - so this is a free DB read per holding, not a new yfinance call.
+    def fmt(value, as_percent=False):
+        if value is None:
+            return "n/a"
+        return f"{value * 100:.1f}%" if as_percent else f"{value:.2f}"
+
+    fundamentals_lines = []
+    for h in holdings_data["holdings"]:
+        cached_price = db.query(PriceCache).filter(PriceCache.ticker == h["ticker"]).first()
+        if not cached_price:
+            continue
+        fundamentals_lines.append(
+            f"- {h['ticker']} ({cached_price.sector or 'unknown sector'}): "
+            f"P/E {fmt(cached_price.pe_ratio)}, forward P/E {fmt(cached_price.forward_pe)}, "
+            f"P/B {fmt(cached_price.price_to_book)}, "
+            f"profit margin {fmt(cached_price.profit_margins, as_percent=True)}, "
+            f"revenue growth {fmt(cached_price.revenue_growth, as_percent=True)}, "
+            f"debt/equity {fmt(cached_price.debt_to_equity)}, "
+            # dividendYield comes back from yfinance already as a plain
+            # percentage (0.44 means 0.44%), unlike profit_margins/
+            # revenue_growth which are 0-1 fractions - so no *100 here,
+            # unlike the as_percent=True fields above.
+            f"dividend yield {fmt(cached_price.dividend_yield) + '%' if cached_price.dividend_yield is not None else 'n/a'}"
+        )
+    fundamentals_summary = "\n".join(fundamentals_lines) or "No fundamentals data available."
+
     return f"""You are InnerStock's investing advisor.
 
 Be conversational, practical, and concise. Match the depth of your answer to the user's question.
@@ -944,7 +994,7 @@ Default behavior:
 - Comparisons or explanations: 1–3 short paragraphs.
 - Give detailed analysis only when the user explicitly requests it (e.g. "analyze", "explain in depth", "walk me through", or "give me a detailed report").
 
-Use only the user's profile, holdings, trades, or behavioral patterns that are relevant to the current question. Don't force portfolio references into general investing questions.
+Use only the user's profile, holdings, fundamentals, trades, or behavioral patterns that are relevant to the current question. Don't force portfolio references into general investing questions.
 
 If important information is missing, ask one brief clarifying question instead of making assumptions.
 
@@ -968,6 +1018,9 @@ Do not give generic investing advice. Ground your answers in the real data below
 {holdings_summary}
 Total portfolio value: ${holdings_data['total_value']:.2f}
 Average conviction across positions: {holdings_data['avg_conviction']}/5
+
+=== FUNDAMENTALS ===
+{fundamentals_summary}
 
 === RECENT TRADES ===
 {trades_summary}
