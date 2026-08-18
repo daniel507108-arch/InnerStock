@@ -49,6 +49,7 @@ class Trade(Base):
     conviction_score = Column(Integer, nullable=False)   # 1-5
     review_date = Column(Date, nullable=False)
     outcome_tag = Column(String, nullable=True)       # stays empty until resurfaced & graded
+    review_notes = Column(Text, nullable=True)         # NEW — optional freeform reflection, added at grading time
     created_at = Column(DateTime, server_default=func.now())
 
 

@@ -50,20 +50,45 @@
   }
 }
 
+/* Trimmed down from the original Vite+React starter template. The old
+   file (still sitting in Frontend/src/index.css, imported by main.jsx
+   BEFORE theme.css) capped the entire app to a fixed, centered column:
+
+     #root {
+       width: 1126px;
+       max-width: 100%;
+       margin: 0 auto;
+       text-align: center;
+       border-inline: 1px solid var(--border);
+       min-height: 100svh;
+       ...
+     }
+
+   That's almost certainly what's behind the "vertical, mobile-like"
+   appearance — the WHOLE app (sidebar included) was boxed into a fixed
+   1126px-wide centered column with a visible left/right border,
+   regardless of how wide the actual browser window is. On a wide
+   monitor that reads exactly like what you saw: a narrow vertical
+   strip of app floating in a sea of empty space on either side, not
+   because of anything in the dashboard's own CSS, but because its
+   container was already capped before any of that CSS applied.
+
+   This version removes the width cap entirely and lets #root — and
+   everything inside it — fill the actual viewport, which is what
+   .app-shell (in theme.css) was already assuming. The rest of the
+   original file (hero/counter/#next-steps boilerplate, the light-mode
+   variables) was leftover Vite starter-template styling not used by
+   any InnerStock component — safe to drop. If anything in here turns
+   out to be referenced somewhere I haven't seen, it's a quick revert
+   from git, not a real risk. */
+
 body {
   margin: 0;
 }
 
 #root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
+  width: 100%;
   min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
 }
 
 h1,
