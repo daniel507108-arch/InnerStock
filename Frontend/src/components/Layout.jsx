@@ -1,22 +1,18 @@
-import { IconLayoutDashboard, IconPlus, IconClock, IconChartBar, IconMessageCircle } from "@tabler/icons-react"
+import {
+  IconLayoutDashboard,
+  IconPlus,
+  IconClock,
+  IconChartBar,
+  IconMessageCircle,
+} from "@tabler/icons-react"
 
-
+// One nav row. Pure presentation — active state and the click handler are
+// both owned by the parent, this component just renders what it's told.
 function NavItem({ label, active, onClick, icon }) {
   return (
     <div
       onClick={onClick}
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "6px",
-        padding: "6px 12px",
-        borderRadius: "var(--radius-sm)",
-        fontSize: "13px",
-        fontWeight: active ? 500 : 400,
-        background: active ? "var(--color-surface)" : "transparent",
-        color: active ? "var(--color-text-primary)" : "var(--color-text-secondary)",
-        cursor: "pointer",
-      }}
+      className={`nav-item${active ? " active" : ""}`}
     >
       {icon}
       {label}
@@ -24,32 +20,73 @@ function NavItem({ label, active, onClick, icon }) {
   )
 }
 
+// Sidebar shell, replacing the old horizontal top nav. Every view
+// (Dashboard, TradeForm, ThesisReview, ChatScreen) renders inside
+// `.main` and is responsible for its OWN topbar/content — Layout only
+// owns the parts that are identical on every screen: the brand mark,
+// the four nav items, and the logout control.
 function Layout({ activeView, onNavigate, onLogout, children }) {
   return (
-    <div style={{ background: "var(--color-bg)", minHeight: "100vh", color: "var(--color-text-primary)" }}>
-      <nav style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 20px", borderBottom: "1px solid var(--color-border)" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-          <div style={{ width: "26px", height: "26px", borderRadius: "7px", background: "var(--color-success-bg)", display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <IconChartBar size={16} color="var(--color-success)" />
-          </div>
-          <span style={{ fontWeight: 500, fontSize: "15px" }}>InnerStock</span>
-      </div>
-        <div style={{ display: "flex", gap: "4px" }}>
-          <NavItem label="Dashboard" active={activeView === "dashboard"} onClick={() => onNavigate("dashboard")} icon={<IconLayoutDashboard size={16} />} />
-          <NavItem label="Log trade" active={activeView === "logtrade"} onClick={() => onNavigate("logtrade")} icon={<IconPlus size={16} />} />
-          <NavItem label="Thesis review" active={activeView === "thesisreview"} onClick={() => onNavigate("thesisreview")} icon={<IconClock size={16} />} />
-          <NavItem label="Advisor" active={activeView === "advisor"} onClick={() => onNavigate("advisor")} icon={<IconMessageCircle size={16} />} />
+    <div className="app-shell">
+      <div className="sidebar">
+        <div className="brand">
+          <div className="brand-mark" />
+          <span className="brand-name">InnerStock</span>
         </div>
-        <button
-          onClick={onLogout}
-          style={{ background: "transparent", border: "1px solid var(--color-border-strong)", borderRadius: "var(--radius-sm)", padding: "0.3rem 0.7rem", color: "var(--color-text-secondary)", fontSize: "var(--text-sm)", cursor: "pointer" }}
-        >
-          Log out
-        </button>
-      </nav>
-      <main style={{ padding: "20px" }}>
-        {children}
-      </main>
+
+        <nav className="nav">
+          <NavItem
+            label="Dashboard"
+            active={activeView === "dashboard"}
+            onClick={() => onNavigate("dashboard")}
+            icon={<IconLayoutDashboard size={17} />}
+          />
+          <NavItem
+            label="Log trade"
+            active={activeView === "logtrade"}
+            onClick={() => onNavigate("logtrade")}
+            icon={<IconPlus size={17} />}
+          />
+          <NavItem
+            label="Thesis review"
+            active={activeView === "thesisreview"}
+            onClick={() => onNavigate("thesisreview")}
+            icon={<IconClock size={17} />}
+          />
+          <NavItem
+            label="Advisor"
+            active={activeView === "advisor"}
+            onClick={() => onNavigate("advisor")}
+            icon={<IconMessageCircle size={17} />}
+          />
+        </nav>
+
+        {/* margin-top: auto (set on .nav-footer in theme.css) pins this to
+            the bottom of the sidebar regardless of how many nav items exist
+            above it, the same trick used for a sticky footer. */}
+        <div className="nav-footer">
+          <div className="user-chip">
+            <div className="avatar">
+              <IconChartBar size={13} />
+            </div>
+            <button
+              onClick={onLogout}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "inherit",
+                font: "inherit",
+                cursor: "pointer",
+                padding: 0,
+              }}
+            >
+              Log out
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="main">{children}</div>
     </div>
   )
 }

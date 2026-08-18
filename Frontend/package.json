@@ -12,7 +12,8 @@
   "dependencies": {
     "@tabler/icons-react": "^3.46.0",
     "react": "^19.2.7",
-    "react-dom": "^19.2.7"
+    "react-dom": "^19.2.7",
+    "react-markdown": "^10.1.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

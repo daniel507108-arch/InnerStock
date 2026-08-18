@@ -468,10 +468,38 @@ def get_thesis_reviews(db: Session = Depends(get_db), current_user: User = Depen
 
     return {"reviews": reviews}
 
+# Returns trades that HAVE been graded (outcome_tag is set), most recent
+# first, for the "Recently reviewed" section — the counterpart to
+# /thesis-reviews above, which only returns trades still PENDING review.
+# PROTECTED + SCOPED: only the logged-in user's own reviewed trades.
+@app.get("/thesis-reviews/recent")
+def get_recent_thesis_reviews(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    reviewed_trades = (
+        db.query(Trade)
+        .filter(Trade.user_id == current_user.id, Trade.outcome_tag.isnot(None))
+        .order_by(Trade.created_at.desc())
+        .limit(10)
+        .all()
+    )
+
+    reviews = [
+        {
+            "id": t.id,
+            "ticker": t.ticker,
+            "action": t.action,
+            "thesis_text": t.thesis_text,
+            "conviction_score": t.conviction_score,
+            "outcome_tag": t.outcome_tag,
+            "review_notes": t.review_notes,
+        }
+        for t in reviewed_trades
+    ]
+    return {"reviews": reviews}
 
 # Defines what a valid outcome update must look like
 class OutcomeUpdate(BaseModel):
     outcome_tag: str  # expected: "correct", "incorrect", or "mixed"
+    review_notes: Optional[str] = None  # optional freeform reflection, saved alongside the grade
 
 
 # Updates one specific trade's outcome_tag. Once set, that trade stops
@@ -487,9 +515,10 @@ def update_trade_outcome(trade_id: int, update: OutcomeUpdate, db: Session = Dep
         raise HTTPException(status_code=404, detail=f"Trade with id {trade_id} not found")
 
     trade.outcome_tag = update.outcome_tag
+    trade.review_notes = update.review_notes
     db.commit()
 
-    return {"success": True, "id": trade_id, "outcome_tag": trade.outcome_tag}
+    return {"success": True, "id": trade_id, "outcome_tag": trade.outcome_tag, "review_notes": trade.review_notes}
 
 # Pulls recent news headlines via yfinance, sends them to Claude for a
 # single overall sentiment classification, and returns exactly one of:
@@ -891,10 +920,11 @@ Stated fear/mistake: {profile.biggest_fear or "not provided"}
     ) or "No current holdings."
 
     trades_summary = "\n".join(
-        f"- {t.trade_date} {t.action.upper()} {t.ticker}: conviction {t.conviction_score}/5, "
-        f"thesis: \"{t.thesis_text}\", outcome: {t.outcome_tag or 'not yet reviewed'}"
-        for t in recent_trades
-    ) or "No trades logged yet."
+    f"- {t.trade_date} {t.action.upper()} {t.ticker}: conviction {t.conviction_score}/5, "
+    f"thesis: \"{t.thesis_text}\", outcome: {t.outcome_tag or 'not yet reviewed'}"
+    + (f", reflection: \"{t.review_notes}\"" if t.review_notes else "")
+    for t in recent_trades
+) or "No trades logged yet."
 
     patterns_summary = f"""
 Reviewed trades: {patterns_data['reviewed_count']}, pending review: {patterns_data['pending_count']}

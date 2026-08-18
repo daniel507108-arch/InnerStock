@@ -17,4 +17,4 @@ build/
 .vscode/
 
 # Database files (each teammate keeps their own local copy)
-Backend/*.db
+*.db

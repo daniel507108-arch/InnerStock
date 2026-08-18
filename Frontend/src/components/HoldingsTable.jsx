@@ -1,145 +1,161 @@
-import { useState } from "react"
+import { useState, Fragment } from "react"
 import SentimentBadge from "./SentimentBadge"
 import BullBearPanel from "./BullBearPanel"
-import { IconAlertTriangle, IconBolt } from "@tabler/icons-react"
+import { IconAlertTriangle } from "@tabler/icons-react"
 
-// NOTE: no longer fetches its own data - Dashboard.jsx fetches /holdings
-// once and passes the result down as the `holdings` prop below. This
-// component is now purely: given holdings, render the table + concentration
-// alert + bull/bear panels. Loading/error/empty states are handled one
-// level up, in Dashboard.jsx, before this component ever renders.
+// Still purely presentational — holdings comes from Dashboard.jsx's single
+// /holdings fetch, this component only renders it. The `<style>` block that
+// used to live here has moved to theme.css as .holdings-table / .pill-* /
+// .concentration-banner etc., since those rules are shared shell classes
+// now, not something unique to this one component.
 function HoldingsTable({ holdings }) {
-  // Controls which gain/loss view is currently shown - toggled by the
-  // buttons below. Both values are always present in the /holdings response,
-  // so switching this doesn't require any new fetch - just re-reads a
-  // different field from data we already have.
   const [view, setView] = useState("all-time") // "all-time" or "today"
-
-  // Holdings flagged by the backend as over the concentration threshold
-  const overweightHoldings = holdings.filter(h => h.overweight_flag)
-
   const [expandedTicker, setExpandedTicker] = useState(null)
 
-  // Calculates all-time gain/loss on the frontend from avg_cost and
-  // current_price. Note: the backend already sends this same info as
-  // total_gain_loss / total_gain_loss_percent - this function duplicates
-  // that math. Not broken, just worth eventually simplifying to just
-  // read h.total_gain_loss directly instead.
-  function calculateGainLoss(h) {
-    const gainLoss = (h.current_price - h.avg_cost) * h.shares
-    const gainLossPercent = ((h.current_price - h.avg_cost) / h.avg_cost) * 100
-    return { gainLoss, gainLossPercent }
-  }
+  const overweightHoldings = holdings.filter((h) => h.overweight_flag)
+  // Used to size the allocation bar relative to the biggest position in the
+  // table, so the largest holding's bar reads as "full" and everything else
+  // is proportional to it — a flat 0-100% scale would make every bar look
+  // nearly empty once one position dominates the portfolio.
+  const maxAllocation = Math.max(...holdings.map((h) => h.percentage), 1)
 
-  // holdings is guaranteed non-empty here - Dashboard.jsx already checked
-  // loading/error/empty states before rendering this component at all.
+  
   return (
-    <div>
-      <style>{`
-        .holdings-table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
-        .holdings-table th, .holdings-table td { padding: 0.5rem 1rem; text-align: left; border-bottom: 1px solid var(--color-border); }
-        .holdings-table th { background: var(--color-surface); color: var(--color-text-secondary); font-weight: 500; }
-        .holdings-table tbody tr:nth-child(even) { background: var(--color-surface-alt); }
-        .concentration-alert { background: var(--color-warning-fill); border: none; color: var(--color-on-warning); padding: 0.85rem 1.1rem; border-radius: var(--radius-sm); margin-bottom: var(--space-md); font-weight: var(--font-weight-medium); }
-        .sentiment-positive { background: var(--color-success-bg); color: var(--color-success); }
-        .sentiment-negative { background: var(--color-danger-bg); color: var(--color-danger); }
-        .sentiment-neutral { background: var(--color-surface); color: var(--color-text-secondary); }
-        .sentiment-loading { color: var(--color-text-muted); }
-        .sentiment-unavailable { color: var(--color-text-muted); }
-        .sentiment-badge { padding: 0.2rem 0.65rem; border-radius: 999px; font-size: var(--text-xs); text-transform: capitalize; display: inline-block; }
-      `}</style>
-
-      {/* Only shown at all if at least one holding is flagged overweight */}
-      {overweightHoldings.length > 0 && (
-        <div className="concentration-alert">
-          <strong style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-            <IconAlertTriangle size={16} /> Concentration warning
-          </strong>
-          <ul>
-            {overweightHoldings.map((h) => (
-              <li key={h.ticker}>
-                {h.ticker} makes up {h.percentage.toFixed(1)}% of your portfolio — consider whether this level of concentration matches your risk tolerance.
-              </li>
-            ))}
-          </ul>
+    <div className="card">
+      <div className="card-head">
+        <h2>Holdings</h2>
+        {/* Same local-state toggle as before — both today/all-time fields
+            are already present in every holding from the one /holdings
+            fetch, so flipping this never triggers a new request. */}
+        <div className="toggle-group">
+          <button
+            className={view === "today" ? "active" : ""}
+            onClick={() => setView("today")}
+          >
+            Today
+          </button>
+          <button
+            className={view === "all-time" ? "active" : ""}
+            onClick={() => setView("all-time")}
+          >
+            All-time
+          </button>
         </div>
-      )}
+      </div>
 
-      {/* Toggle buttons - just flip local "view" state, no new fetch needed */}
-      <div style={{ marginBottom: "var(--space-sm)" }}>
-        <button
-          onClick={() => setView("all-time")}
-          style={{ fontWeight: view === "all-time" ? "bold" : "normal" }}
-        >
-          All-time
-        </button>
-        <button
-          onClick={() => setView("today")}
-          style={{ fontWeight: view === "today" ? "bold" : "normal" }}
-        >
-          Today
-        </button>
+      <div style={{ padding: overweightHoldings.length > 0 ? "var(--space-md) var(--space-md) 0" : 0 }}>
+        {overweightHoldings.length > 0 && (
+          <div className="concentration-banner">
+            <span>
+              <IconAlertTriangle size={14} style={{ verticalAlign: "-2px", marginRight: "6px" }} />
+              {overweightHoldings.length === 1 ? (
+                <>
+                  <strong>{overweightHoldings[0].ticker}</strong> is{" "}
+                  {overweightHoldings[0].percentage.toFixed(0)}% of your portfolio — consider whether
+                  this concentration matches your risk tolerance.
+                </>
+              ) : (
+                <>
+                  {overweightHoldings.map((h) => h.ticker).join(", ")} are flagged as overweight —
+                  review your concentration.
+                </>
+              )}
+            </span>
+          </div>
+        )}
       </div>
 
       <table className="holdings-table">
+        <colgroup>
+  <col style={{ width: "20%" }} />{/* Ticker */}
+  <col style={{ width: "12%" }} />{/* Sentiment */}
+  <col style={{ width: "10%" }} />{/* Shares */}
+  <col style={{ width: "12%" }} />{/* Price */}
+  <col style={{ width: "14%" }} />{/* Value */}
+  <col style={{ width: "16%" }} />{/* Gain/Loss */}
+  <col style={{ width: "12%" }} />{/* Allocation */}
+  <col style={{ width: "4%" }} />{/* expand button */}
+</colgroup>
         <thead>
           <tr>
             <th>Ticker</th>
+            <th className="col-left">Sentiment</th>
             <th>Shares</th>
-            <th>Avg Cost</th>
-            <th>Current Price</th>
-            <th>Gain/Loss</th>
+            <th>Price</th>
             <th>Value</th>
-            <th>% of Portfolio</th>
-            <th>Sentiment</th>
-            <th>Analysis</th>
+            <th>Gain/Loss</th>
+            <th>Allocation</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
           {holdings.map((h) => {
-  const { gainLoss, gainLossPercent } = calculateGainLoss ? calculateGainLoss(h) : {}
-  const activeGainLoss = view === "all-time" ? h.total_gain_loss : h.day_gain_loss
-  const activeGainLossPercent = view === "all-time" ? h.total_gain_loss_percent : h.day_gain_loss_percent
-  const isExpanded = expandedTicker === h.ticker
+            const activeGainLoss = view === "all-time" ? h.total_gain_loss : h.day_gain_loss
+            const activeGainLossPercent =
+              view === "all-time" ? h.total_gain_loss_percent : h.day_gain_loss_percent
+            const isExpanded = expandedTicker === h.ticker
 
-  return (
-    <>
-      <tr key={h.ticker}>
-        <td>{h.ticker}</td>
-        <td>{h.shares.toFixed(4)}</td>
-        <td>${h.avg_cost.toFixed(2)}</td>
-        <td>${h.current_price.toFixed(2)}</td>
-        <td style={{ color: activeGainLoss >= 0 ? "var(--color-success)" : "var(--color-danger)" }}>
-          {`${activeGainLoss >= 0 ? "+" : ""}$${activeGainLoss.toFixed(2)} (${activeGainLossPercent.toFixed(2)}%)`}
-        </td>
-        <td>${h.value.toFixed(2)}</td>
-        <td style={h.overweight_flag ? { color: "var(--color-warning)", fontWeight: "var(--font-weight-medium)" } : {}}>
-  {h.percentage.toFixed(1)}%
-</td>
-        <td><SentimentBadge ticker={h.ticker} /></td>
-        <td>
-          <button
-            onClick={() => setExpandedTicker(isExpanded ? null : h.ticker)}
-            style={{ background: "transparent", border: "1px solid var(--color-border-strong)", borderRadius: "var(--radius-sm)", padding: "0.3rem 0.6rem", cursor: "pointer", fontSize: "var(--text-xs)" }}
-          >
-            {isExpanded ? "Hide" : "View"}
-          </button>
-        </td>
-      </tr>
-      {isExpanded && (
-        <tr>
-          <td colSpan={9} style={{ background: "var(--color-surface-alt)", padding: "var(--space-md)" }}>
-            <BullBearPanel ticker={h.ticker} forceExpanded />
-          </td>
-        </tr>
-      )}
-    </>
-  )
-})}
+            return (
+              // This is the fix for the known Fragment-key bug: the shorthand
+              // <>...</> CANNOT take a `key` prop, so wrapping each row pair
+              // in it silently broke React's reconciliation across re-renders
+              // (expand/collapse state, sentiment fetches, etc. could bleed
+              // between tickers). `<Fragment key={h.ticker}>` is the same
+              // "no extra DOM node" behavior but WITH a key.
+              <Fragment key={h.ticker}>
+                <tr>
+                  <td>
+                    <div className="ticker-cell">
+                      <div className="ticker-badge">{h.ticker.slice(0, 2)}</div>
+                      <div>
+                        <div className="ticker-name">{h.ticker}</div>
+                        <div className="ticker-shares">{h.shares.toFixed(4)} sh</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="col-left">
+                    <SentimentBadge ticker={h.ticker} />
+                  </td>
+                  <td>{h.shares.toFixed(4)}</td>
+                  <td>${h.current_price.toFixed(2)}</td>
+                  <td>${h.value.toFixed(2)}</td>
+                  <td className={activeGainLoss >= 0 ? "gain-up" : "gain-down"}>
+                    {activeGainLoss >= 0 ? "+" : ""}
+                    ${activeGainLoss.toFixed(2)} ({activeGainLossPercent.toFixed(2)}%)
+                  </td>
+                  <td className={h.overweight_flag ? "overweight" : ""}>
+                    {h.percentage.toFixed(0)}%
+                    <div className="alloc-bar">
+                      <div
+                        className="alloc-fill"
+                        style={{
+                          width: `${(h.percentage / maxAllocation) * 100}%`,
+                          background: h.overweight_flag ? "var(--color-warning)" : "var(--color-accent)",
+                        }}
+                      />
+                    </div>
+                  </td>
+                  <td>
+                    <button
+                      className="expand-btn"
+                      onClick={() => setExpandedTicker(isExpanded ? null : h.ticker)}
+                    >
+                      {isExpanded ? "▴" : "▾"}
+                    </button>
+                  </td>
+                </tr>
+                {isExpanded && (
+                  <tr className="expand-row">
+                    <td colSpan={8}>
+                      <BullBearPanel ticker={h.ticker} forceExpanded />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
+            )
+          })}
         </tbody>
       </table>
-
-      
     </div>
   )
 }
