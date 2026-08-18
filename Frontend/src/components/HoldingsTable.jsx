@@ -109,19 +109,19 @@ function HoldingsTable({ holdings }) {
                       <div className="ticker-badge">{h.ticker.slice(0, 2)}</div>
                       <div>
                         <div className="ticker-name">{h.ticker}</div>
-                        <div className="ticker-shares">{h.shares} sh</div>
+                        <div className="ticker-shares">{h.shares.toFixed(4)} sh</div>
                       </div>
                     </div>
                   </td>
                   <td className="col-left">
                     <SentimentBadge ticker={h.ticker} />
                   </td>
-                  <td>{h.shares}</td>
+                  <td>{h.shares.toFixed(4)}</td>
                   <td>${h.current_price.toFixed(2)}</td>
                   <td>${h.value.toFixed(2)}</td>
                   <td className={activeGainLoss >= 0 ? "gain-up" : "gain-down"}>
                     {activeGainLoss >= 0 ? "+" : ""}
-                    ${activeGainLoss.toFixed(2)} ({activeGainLossPercent.toFixed(1)}%)
+                    ${activeGainLoss.toFixed(2)} ({activeGainLossPercent.toFixed(2)}%)
                   </td>
                   <td className={h.overweight_flag ? "overweight" : ""}>
                     {h.percentage.toFixed(0)}%

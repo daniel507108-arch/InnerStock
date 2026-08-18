@@ -45,9 +45,9 @@ class Trade(Base):
     quantity = Column(Numeric, nullable=False)
     price_per_share = Column(Numeric, nullable=False)
     trade_date = Column(Date, nullable=False)
-    thesis_text = Column(Text, nullable=False)
-    conviction_score = Column(Integer, nullable=False)   # 1-5
-    review_date = Column(Date, nullable=False)
+    thesis_text = Column(Text, nullable=True)
+    conviction_score = Column(Integer, nullable=True)   # 1-5
+    review_date = Column(Date, nullable=True)
     outcome_tag = Column(String, nullable=True)       # stays empty until resurfaced & graded
     review_notes = Column(Text, nullable=True)         # NEW — optional freeform reflection, added at grading time
     created_at = Column(DateTime, server_default=func.now())
@@ -62,6 +62,18 @@ class PriceCache(Base):
     market_cap = Column(Numeric, nullable=True)
     pe_ratio = Column(Numeric, nullable=True)
     sector = Column(String, nullable=True)
+    last_updated = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
+class SentimentCache(Base):
+    __tablename__ = "sentiment_cache"
+
+    # Same shape/purpose as PriceCache above, but for Claude sentiment
+    # analysis instead of yfinance prices - keyed by ticker, refreshed on a
+    # TTL instead of every request, since re-generating this means a real
+    # Claude API call (unlike a price lookup, this one costs money per hit).
+    ticker = Column(String, primary_key=True)
+    sentiment = Column(String, nullable=False)     # "positive" / "neutral" / "negative"
+    summary = Column(Text, nullable=False)
     last_updated = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 class ChatMessage(Base):

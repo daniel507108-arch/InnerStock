@@ -16,7 +16,7 @@ from models import Trade
 # so FastAPI can validate it automatically before our code even runs
 from pydantic import BaseModel
 from datetime import date
-from models import Trade, PriceCache, User, UserProfile, ChatMessage
+from models import Trade, PriceCache, User, UserProfile, ChatMessage, SentimentCache
 from datetime import date, datetime, timedelta
 
 #FOR THE CLAUDE API
@@ -28,6 +28,7 @@ import anthropic
 from fastapi import UploadFile, File
 import csv
 import io
+import re
 
 # AUTH: registers a proper "bearer token" security scheme with FastAPI, so
 # Swagger UI's Authorize button recognizes it and can attach the token
@@ -38,6 +39,13 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 load_dotenv()
 
 claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+# Per-million-token pricing for claude-sonnet-4-6, the model used for
+# sentiment/bull-bear calls - used to turn a response's token usage into an
+# actual dollar figure instead of leaving spend invisible. Update these if
+# the model or its pricing changes.
+CLAUDE_SONNET_4_6_INPUT_COST_PER_MTOK = 3.00
+CLAUDE_SONNET_4_6_OUTPUT_COST_PER_MTOK = 15.00
 
 from auth import hash_password, verify_password, create_access_token, decode_access_token
 from typing import List, Optional
@@ -157,7 +165,13 @@ def get_or_fetch_price(ticker: str, db: Session):
         # rather than crashing the whole request
         return cached
 
+    # yfinance only populates "currentPrice" for equities (quoteType
+    # "EQUITY") - ETFs like VFV.TO/XEQT.TO come back with currentPrice=None
+    # and the live price sitting in "regularMarketPrice" instead. Without
+    # this fallback every ETF holding silently priced at $0.
     price = info.get("currentPrice")
+    if price is None:
+        price = info.get("regularMarketPrice")
     if price is None:
         return cached  # invalid ticker or no data - same fallback
 
@@ -247,13 +261,20 @@ def get_trades(db: Session = Depends(get_db), current_user: User = Depends(get_c
 # PROTECTED + SCOPED: only aggregates the logged-in user's own trades.
 @app.get("/holdings")
 def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    trades = db.query(Trade).filter(Trade.user_id == current_user.id).all()
+    # Ordered chronologically - cost_tracking below needs trades in the order
+    # they actually happened, since a sell has to know the average cost built
+    # up by the buys that came before it.
+    trades = db.query(Trade).filter(Trade.user_id == current_user.id).order_by(Trade.trade_date, Trade.id).all()
 
     # Step 1: tally net shares held per ticker (buys add, sells subtract)
     holdings = {}
-    # NEW: separately track total cost and total quantity bought, for avg_cost.
-    # Only "buy" trades count here - selling shares doesn't change the
-    # average cost of the shares you still hold.
+    # NEW: moving-average cost basis per ticker (same method brokerages use
+    # for ACB). total_qty here tracks shares currently held (not "ever
+    # bought") - a sell removes shares at the position's average cost, which
+    # shrinks total_cost proportionally but leaves the average cost per
+    # remaining share unchanged. Without this, a fully-exited lot (bought
+    # and later completely sold) would still drag up the avg_cost of shares
+    # bought afterwards, which don't actually share any cost history with it.
     cost_tracking = {}
 
     for trade in trades:
@@ -261,15 +282,22 @@ def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get
         if ticker not in holdings:
             holdings[ticker] = 0
         if ticker not in cost_tracking:
-            cost_tracking[ticker] = {"total_cost": 0, "total_bought_qty": 0}
+            cost_tracking[ticker] = {"total_cost": 0, "total_qty": 0}
+
+        qty = float(trade.quantity)
+        price = float(trade.price_per_share)
 
         if trade.action == "buy":
-            holdings[ticker] += float(trade.quantity)
-            # accumulate cost basis for this ticker
-            cost_tracking[ticker]["total_cost"] += float(trade.quantity) * float(trade.price_per_share)
-            cost_tracking[ticker]["total_bought_qty"] += float(trade.quantity)
+            holdings[ticker] += qty
+            cost_tracking[ticker]["total_cost"] += qty * price
+            cost_tracking[ticker]["total_qty"] += qty
         elif trade.action == "sell":
-            holdings[ticker] -= float(trade.quantity)
+            holdings[ticker] -= qty
+            held_qty = cost_tracking[ticker]["total_qty"]
+            if held_qty > 0:
+                avg_cost_before_sell = cost_tracking[ticker]["total_cost"] / held_qty
+                cost_tracking[ticker]["total_cost"] -= avg_cost_before_sell * qty
+                cost_tracking[ticker]["total_qty"] -= qty
 
     # Step 2: drop any ticker fully sold out (0 or negative shares left)
     holdings = {ticker: shares for ticker, shares in holdings.items() if shares > 0}
@@ -291,10 +319,11 @@ def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get
         value = shares * current_price
         total_value += value
 
-        # NEW: calculate weighted average cost for this ticker
-        bought_qty = cost_tracking[ticker]["total_bought_qty"]
-        if bought_qty > 0:
-            avg_cost = cost_tracking[ticker]["total_cost"] / bought_qty
+        # NEW: moving-average cost of the shares currently held (see
+        # cost_tracking comment above - sells already kept this in sync)
+        held_qty = cost_tracking[ticker]["total_qty"]
+        if held_qty > 0:
+            avg_cost = cost_tracking[ticker]["total_cost"] / held_qty
         else:
             avg_cost = 0  # shouldn't normally happen, but guards against divide-by-zero
 
@@ -340,7 +369,7 @@ def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get
     conviction_by_ticker = {}
     for trade in trades:
         ticker = trade.ticker.upper()
-        if ticker in holdings and trade.action == "buy":
+        if ticker in holdings and trade.action == "buy" and trade.conviction_score is not None:
             conviction_by_ticker.setdefault(ticker, []).append(trade.conviction_score)
 
     per_ticker_avg_conviction = [
@@ -407,91 +436,6 @@ Key Risk: [1 sentence]"""
     return {
         "ticker": ticker,
         "analysis": message.content[0].text
-    }
-
-# Accepts a CSV file upload, validates each row using the same rules as
-# POST /trades, saves valid rows, and reports errors for invalid ones
-# without rejecting the whole file.
-# PROTECTED + SCOPED: every imported trade is stamped with the logged-in
-# user's id, same as POST /trades.
-@app.post("/trades/import")
-async def import_trades(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    contents = await file.read()
-    decoded = contents.decode("utf-8")
-    reader = csv.DictReader(io.StringIO(decoded))
-
-    successful_count = 0
-    errors = []
-
-    # enumerate starting at 1, matching "first data row = row 1" (header doesn't count)
-    for row_num, row in enumerate(reader, start=1):
-        try:
-            ticker = (row.get("ticker") or "").strip()
-            if not ticker:
-                raise ValueError("ticker must not be empty")
-
-            action = (row.get("action") or "").strip().lower()
-            if action not in ("buy", "sell"):
-                raise ValueError('action must be "buy" or "sell"')
-
-            try:
-                quantity = float(row.get("quantity"))
-            except (ValueError, TypeError):
-                raise ValueError("quantity must be a number")
-            if quantity <= 0:
-                raise ValueError("quantity must be greater than 0")
-
-            try:
-                price_per_share = float(row.get("price_per_share"))
-            except (ValueError, TypeError):
-                raise ValueError("price_per_share must be a number")
-            if price_per_share <= 0:
-                raise ValueError("price_per_share must be greater than 0")
-
-            try:
-                trade_date = date.fromisoformat((row.get("trade_date") or "").strip())
-            except ValueError:
-                raise ValueError("trade_date must be a valid date (YYYY-MM-DD)")
-
-            thesis_text = (row.get("thesis_text") or "").strip()
-            if not thesis_text:
-                raise ValueError("thesis_text must not be empty")
-
-            try:
-                conviction_score = int(row.get("conviction_score"))
-            except (ValueError, TypeError):
-                raise ValueError("conviction_score must be an integer")
-            if conviction_score < 1 or conviction_score > 5:
-                raise ValueError("conviction_score must be between 1 and 5")
-
-            try:
-                review_date = date.fromisoformat((row.get("review_date") or "").strip())
-            except ValueError:
-                raise ValueError("review_date must be a valid date (YYYY-MM-DD)")
-
-            # all checks passed - save this row
-            new_trade = Trade(
-                user_id=current_user.id,
-                ticker=ticker,
-                action=action,
-                quantity=quantity,
-                price_per_share=price_per_share,
-                trade_date=trade_date,
-                thesis_text=thesis_text,
-                conviction_score=conviction_score,
-                review_date=review_date,
-            )
-            db.add(new_trade)
-            db.commit()
-            successful_count += 1
-
-        except ValueError as e:
-            db.rollback()  # undo any partial change for this failed row
-            errors.append({"row": row_num, "message": str(e)})
-
-    return {
-        "successful_count": successful_count,
-        "errors": errors
     }
 
 # Returns every trade where the review date has passed but it hasn't
@@ -584,6 +528,21 @@ def update_trade_outcome(trade_id: int, update: OutcomeUpdate, db: Session = Dep
 def get_sentiment(ticker: str, db: Session = Depends(get_db)):
     ticker = ticker.upper()  # normalize, same habit as our other stock routes
 
+    # Sentiment costs a real Claude API call to generate, unlike a price
+    # lookup - and the frontend badge re-fetches every time the dashboard
+    # mounts, which was calling Claude once per holding on every single
+    # page visit. Cache it for an hour so repeat visits within the window are
+    # free reads from the DB instead of new API calls.
+    cached = db.query(SentimentCache).filter(SentimentCache.ticker == ticker).first()
+    if cached and cached.last_updated and datetime.utcnow() - cached.last_updated < timedelta(minutes=60):
+        # "unavailable" is a cached marker (see below) for ETFs that
+        # structurally have no per-ticker news on yfinance - skip straight
+        # to the same 404 the caller would get anyway, without re-hitting
+        # yfinance for something that will never have news.
+        if cached.sentiment == "unavailable":
+            raise HTTPException(status_code=404, detail=f"No news available for ticker '{ticker}'")
+        return {"ticker": ticker, "sentiment": cached.sentiment, "summary": cached.summary}
+
     # Ask yfinance for recent news articles about this ticker.
     # stock.news is a DIFFERENT dataset than stock.info - this one returns
     # a list of news article dictionaries, not price/fundamentals data.
@@ -593,6 +552,40 @@ def get_sentiment(ticker: str, db: Session = Depends(get_db)):
     except Exception as e:
         print(f"yfinance news fetch failed for {ticker}: {e}")
         raise HTTPException(status_code=404, detail=f"Could not fetch news for ticker '{ticker}'")
+
+    # CAD-hedged CDR tickers (e.g. GOOG.TO, AAPL.TO) already carry the real
+    # company's news directly on yfinance - no fallback needed. Genuine TSX
+    # ETFs (VFV.TO, XEQT.TO, MUU.TO) never have their own news coverage, and
+    # stripping ".TO" to guess a US equivalent is NOT safe for these: e.g.
+    # bare "MUU" resolves to an unrelated Direxion leveraged ETF, not the
+    # user's actual SavvyLong holding. Distinguish the two with yfinance's
+    # own quoteType instead of guessing from the ticker string: ETFs get a
+    # permanent "unavailable" cache entry (they'll never have news), while
+    # non-ETF ".TO" tickers with no news (a real CDR yfinance hasn't mapped)
+    # fall back to the bare ticker, which is safe for equities/CDRs.
+    if not news_items and ticker.endswith(".TO"):
+        quote_type = None
+        try:
+            quote_type = stock.info.get("quoteType")
+        except Exception as e:
+            print(f"yfinance quoteType lookup failed for {ticker}: {e}")
+
+        if quote_type == "ETF":
+            if cached:
+                cached.sentiment = "unavailable"
+                cached.summary = "No news available for this ETF."
+                cached.last_updated = datetime.utcnow()
+            else:
+                cached = SentimentCache(ticker=ticker, sentiment="unavailable", summary="No news available for this ETF.")
+                db.add(cached)
+            db.commit()
+            raise HTTPException(status_code=404, detail=f"No news available for ticker '{ticker}'")
+        else:
+            base_ticker = ticker[:-3]  # strip ".TO"
+            try:
+                news_items = yf.Ticker(base_ticker).news
+            except Exception as e:
+                print(f"yfinance fallback news fetch failed for {base_ticker}: {e}")
 
     if not news_items:
         raise HTTPException(status_code=404, detail=f"No news available for ticker '{ticker}'")
@@ -626,6 +619,16 @@ SUMMARY: [two sentences explaining why, based on the headlines]"""
             messages=[{"role": "user", "content": prompt}]
         )
         raw_response = message.content[0].text.strip()
+
+        # message.usage carries the actual input/output token counts for
+        # THIS call - multiply by the per-token price to get real dollars
+        # spent, and print it so cost is visible in the uvicorn console
+        # without needing to store or return it anywhere.
+        cost_usd = (
+            message.usage.input_tokens / 1_000_000 * CLAUDE_SONNET_4_6_INPUT_COST_PER_MTOK
+            + message.usage.output_tokens / 1_000_000 * CLAUDE_SONNET_4_6_OUTPUT_COST_PER_MTOK
+        )
+        print(f"[sentiment] {ticker}: ${cost_usd:.6f} ({message.usage.input_tokens} in / {message.usage.output_tokens} out tokens)")
     except Exception as e:
         print(f"Claude API call failed for {ticker} sentiment: {e}")
         raise HTTPException(status_code=404, detail="Could not generate sentiment analysis")
@@ -648,6 +651,17 @@ SUMMARY: [two sentences explaining why, based on the headlines]"""
     # values, default to "neutral" instead of returning something unexpected
     if sentiment not in ("positive", "neutral", "negative"):
         sentiment = "neutral"
+
+    # Save/refresh the cache entry so the next request within the TTL above
+    # skips straight past the news fetch and Claude call entirely.
+    if cached:
+        cached.sentiment = sentiment
+        cached.summary = summary
+        cached.last_updated = datetime.utcnow()
+    else:
+        cached = SentimentCache(ticker=ticker, sentiment=sentiment, summary=summary)
+        db.add(cached)
+    db.commit()
 
     return {
         "ticker": ticker,
@@ -712,7 +726,11 @@ def get_trading_patterns(db: Session = Depends(get_db), current_user: User = Dep
     # many landed in each outcome bucket, so we can see whether higher
     # conviction actually predicts correct calls.
     by_conviction = {}
+    trades_missing_conviction = 0
     for t in reviewed:
+        if t.conviction_score is None:
+            trades_missing_conviction += 1
+            continue
         score = t.conviction_score
         by_conviction.setdefault(score, {"correct": 0, "incorrect": 0, "mixed": 0, "total": 0})
         by_conviction[score][t.outcome_tag] += 1
@@ -754,6 +772,7 @@ def get_trading_patterns(db: Session = Depends(get_db), current_user: User = Dep
     return {
         "reviewed_count": len(reviewed),
         "pending_count": len(pending),
+        "trades_missing_conviction": trades_missing_conviction,
         "by_conviction": conviction_breakdown,
         "fomo_vs_non_fomo": {
             "fomo": {**fomo_stats, "correct_rate": correct_rate(fomo_stats)},
@@ -1041,3 +1060,131 @@ def get_chat_history(db: Session = Depends(get_db), current_user: User = Depends
         .all()
     )
     return {"messages": [{"role": m.role, "content": m.content} for m in messages]}
+
+# Accepts a Wealthsimple "Activities" export CSV directly, in Wealthsimple's
+# own column format (effective_at, activity_type, activity_sub_type, symbol,
+# quantity, unit_price, etc.). Only rows where activity_type == "Trade" are imported; deposits,
+# withdrawals, and other MoneyMovement rows are skipped entirely. Imported
+# trades have no thesis_text/conviction_score/review_date, since Wealthsimple
+# has no concept of any of those - they're left null until the user fills
+# them in manually later.
+@app.post("/trades/import/wealthsimple")
+async def import_trades_wealthsimple(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    contents = await file.read()
+    decoded = contents.decode("utf-8")
+    reader = csv.DictReader(io.StringIO(decoded))
+
+    successful_count = 0
+    skipped_count = 0
+    errors = []
+
+    for row_num, row in enumerate(reader, start=1):
+        activity_type = (row.get("activity_type") or "").strip()
+
+        # Skip anything that isn't an actual buy/sell trade - deposits,
+        # e-Transfers, withdrawals, dividends, etc. all show up in this
+        # same export but aren't trades.
+        if activity_type != "Trade":
+            skipped_count += 1
+            continue
+
+        try:
+            sub_type = (row.get("activity_sub_type") or "").strip().upper()
+            if sub_type not in ("BUY", "SELL"):
+                raise ValueError(f"Unrecognized trade sub-type: {sub_type}")
+            action = sub_type.lower()
+
+            ticker = (row.get("symbol") or "").strip()
+            if not ticker:
+                raise ValueError("symbol must not be empty")
+
+            # Wealthsimple's CSV gives no exchange field, so a bare symbol like "GOOG"
+            # is ambiguous - could be the real Nasdaq stock or a CAD-hedged CDR sharing
+            # the same root symbol (priced completely differently, ~$54 vs ~$180).
+            # The description's "FX Rate: ..." marker is our only signal: its presence
+            # means a real US-priced security, its absence means CAD-native (TSX ETF
+            # or CDR) - so append ".TO" only when there's no FX Rate, and leave symbols
+            # Wealthsimple already suffixed (e.g. "HUT.TO") untouched.
+            description = row.get("description") or ""
+            if "." not in ticker and "FX Rate" not in description:
+                ticker = f"{ticker}.TO"
+
+            # Wealthsimple signs quantity negative for sells - take the
+            # absolute value, since action already carries buy/sell direction.
+            try:
+                quantity = abs(float(row.get("quantity")))
+            except (ValueError, TypeError):
+                raise ValueError("quantity must be a number")
+            if quantity <= 0:
+                raise ValueError("quantity must be greater than 0")
+
+            try:
+                price_per_share = float(row.get("unit_price"))
+            except (ValueError, TypeError):
+                raise ValueError("unit_price must be a number")
+            if price_per_share <= 0:
+                raise ValueError("unit_price must be greater than 0")
+
+            # Wealthsimple's unit_price for a real US stock is already
+            # CAD-converted (e.g. "FX Rate: 1.3926" in the description means
+            # the $134.03 unit_price is CAD, not USD). But get_or_fetch_price
+            # looks these bare tickers up on yfinance, which returns USD -
+            # so storing the CAD price here would compare CAD cost basis
+            # against USD current price later (a ~40% phantom loss). Divide
+            # back out by the trade's own FX rate so price_per_share ends up
+            # in the same currency (USD) that the live price will be in.
+            # CAD-native tickers (already suffixed ".TO" above) have no FX
+            # Rate and are left as-is, since both sides stay in CAD.
+            fx_match = re.search(r"FX Rate:\s*([\d.]+)", description)
+            if fx_match:
+                fx_rate = float(fx_match.group(1))
+                price_per_share = price_per_share / fx_rate
+
+            # effective_at is a full ISO timestamp with time and timezone,
+            # e.g. "2026-04-15T12:03:38-04:00" - only the date portion is
+            # needed, so split off everything from "T" onward.
+            effective_at_raw = (row.get("effective_at") or "").strip()
+            if not effective_at_raw:
+                raise ValueError("effective_at must not be empty")
+            try:
+                trade_date = date.fromisoformat(effective_at_raw.split("T")[0])
+            except ValueError:
+                raise ValueError(f"Could not parse date from: {effective_at_raw}")
+
+            new_trade = Trade(
+                user_id=current_user.id,
+                ticker=ticker.upper(),
+                action=action,
+                quantity=quantity,
+                price_per_share=price_per_share,
+                trade_date=trade_date,
+                thesis_text=None,
+                conviction_score=None,
+                review_date=None,
+            )
+            db.add(new_trade)
+            db.commit()
+            successful_count += 1
+
+        except ValueError as e:
+            db.rollback()
+            errors.append({"row": row_num, "message": str(e)})
+
+    return {
+        "successful_count": successful_count,
+        "skipped_count": skipped_count,
+        "errors": errors
+    }
+
+# Returns trades missing a thesis - the imported-but-unreviewed backlog
+# a user needs to work through after a bulk import, distinct from
+# /thesis-reviews which only shows trades whose review_date has passed.
+@app.get("/trades/incomplete")
+def get_incomplete_trades(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    trades = (
+        db.query(Trade)
+        .filter(Trade.user_id == current_user.id, Trade.thesis_text.is_(None))
+        .order_by(Trade.trade_date.desc())
+        .all()
+    )
+    return {"trades": trades}

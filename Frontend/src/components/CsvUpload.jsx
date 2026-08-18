@@ -23,7 +23,7 @@ function CsvUpload({ onTradeLogged }) {
     formData.append("file", file)
 
     try {
-      const response = await apiFetch("/trades/import", {
+      const response = await apiFetch("/trades/import/wealthsimple", {
         method: "POST",
         body: formData,
       })
