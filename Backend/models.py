@@ -62,6 +62,14 @@ class PriceCache(Base):
     market_cap = Column(Numeric, nullable=True)
     pe_ratio = Column(Numeric, nullable=True)
     sector = Column(String, nullable=True)
+    # NEW - fundamentals for the advisor chat, same yfinance .info call as
+    # everything else above so there's no extra API cost to pull these.
+    forward_pe = Column(Numeric, nullable=True)
+    price_to_book = Column(Numeric, nullable=True)
+    profit_margins = Column(Numeric, nullable=True)
+    revenue_growth = Column(Numeric, nullable=True)
+    debt_to_equity = Column(Numeric, nullable=True)
+    dividend_yield = Column(Numeric, nullable=True)
     last_updated = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
 class SentimentCache(Base):
