@@ -110,7 +110,7 @@ function HoldingsTable({ holdings }) {
         <td>${h.avg_cost.toFixed(2)}</td>
         <td>${h.current_price.toFixed(2)}</td>
         <td style={{ color: activeGainLoss >= 0 ? "var(--color-success)" : "var(--color-danger)" }}>
-          {`${activeGainLoss >= 0 ? "+" : ""}$${activeGainLoss.toFixed(2)} (${activeGainLossPercent.toFixed(1)}%)`}
+          {`${activeGainLoss >= 0 ? "+" : ""}$${activeGainLoss.toFixed(2)} (${activeGainLossPercent.toFixed(2)}%)`}
         </td>
         <td>${h.value.toFixed(2)}</td>
         <td style={h.overweight_flag ? { color: "var(--color-warning)", fontWeight: "var(--font-weight-medium)" } : {}}>

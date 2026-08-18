@@ -63,6 +63,18 @@ class PriceCache(Base):
     sector = Column(String, nullable=True)
     last_updated = Column(DateTime, server_default=func.now(), onupdate=func.now())
 
+class SentimentCache(Base):
+    __tablename__ = "sentiment_cache"
+
+    # Same shape/purpose as PriceCache above, but for Claude sentiment
+    # analysis instead of yfinance prices - keyed by ticker, refreshed on a
+    # TTL instead of every request, since re-generating this means a real
+    # Claude API call (unlike a price lookup, this one costs money per hit).
+    ticker = Column(String, primary_key=True)
+    sentiment = Column(String, nullable=False)     # "positive" / "neutral" / "negative"
+    summary = Column(Text, nullable=False)
+    last_updated = Column(DateTime, server_default=func.now(), onupdate=func.now())
+
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
 

@@ -16,7 +16,7 @@ from models import Trade
 # so FastAPI can validate it automatically before our code even runs
 from pydantic import BaseModel
 from datetime import date
-from models import Trade, PriceCache, User, UserProfile, ChatMessage
+from models import Trade, PriceCache, User, UserProfile, ChatMessage, SentimentCache
 from datetime import date, datetime, timedelta
 
 #FOR THE CLAUDE API
@@ -39,6 +39,13 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 load_dotenv()
 
 claude_client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+# Per-million-token pricing for claude-sonnet-4-6, the model used for
+# sentiment/bull-bear calls - used to turn a response's token usage into an
+# actual dollar figure instead of leaving spend invisible. Update these if
+# the model or its pricing changes.
+CLAUDE_SONNET_4_6_INPUT_COST_PER_MTOK = 3.00
+CLAUDE_SONNET_4_6_OUTPUT_COST_PER_MTOK = 15.00
 
 from auth import hash_password, verify_password, create_access_token, decode_access_token
 from typing import List, Optional
@@ -492,6 +499,21 @@ def update_trade_outcome(trade_id: int, update: OutcomeUpdate, db: Session = Dep
 def get_sentiment(ticker: str, db: Session = Depends(get_db)):
     ticker = ticker.upper()  # normalize, same habit as our other stock routes
 
+    # Sentiment costs a real Claude API call to generate, unlike a price
+    # lookup - and the frontend badge re-fetches every time the dashboard
+    # mounts, which was calling Claude once per holding on every single
+    # page visit. Cache it for an hour so repeat visits within the window are
+    # free reads from the DB instead of new API calls.
+    cached = db.query(SentimentCache).filter(SentimentCache.ticker == ticker).first()
+    if cached and cached.last_updated and datetime.utcnow() - cached.last_updated < timedelta(minutes=60):
+        # "unavailable" is a cached marker (see below) for ETFs that
+        # structurally have no per-ticker news on yfinance - skip straight
+        # to the same 404 the caller would get anyway, without re-hitting
+        # yfinance for something that will never have news.
+        if cached.sentiment == "unavailable":
+            raise HTTPException(status_code=404, detail=f"No news available for ticker '{ticker}'")
+        return {"ticker": ticker, "sentiment": cached.sentiment, "summary": cached.summary}
+
     # Ask yfinance for recent news articles about this ticker.
     # stock.news is a DIFFERENT dataset than stock.info - this one returns
     # a list of news article dictionaries, not price/fundamentals data.
@@ -501,6 +523,40 @@ def get_sentiment(ticker: str, db: Session = Depends(get_db)):
     except Exception as e:
         print(f"yfinance news fetch failed for {ticker}: {e}")
         raise HTTPException(status_code=404, detail=f"Could not fetch news for ticker '{ticker}'")
+
+    # CAD-hedged CDR tickers (e.g. GOOG.TO, AAPL.TO) already carry the real
+    # company's news directly on yfinance - no fallback needed. Genuine TSX
+    # ETFs (VFV.TO, XEQT.TO, MUU.TO) never have their own news coverage, and
+    # stripping ".TO" to guess a US equivalent is NOT safe for these: e.g.
+    # bare "MUU" resolves to an unrelated Direxion leveraged ETF, not the
+    # user's actual SavvyLong holding. Distinguish the two with yfinance's
+    # own quoteType instead of guessing from the ticker string: ETFs get a
+    # permanent "unavailable" cache entry (they'll never have news), while
+    # non-ETF ".TO" tickers with no news (a real CDR yfinance hasn't mapped)
+    # fall back to the bare ticker, which is safe for equities/CDRs.
+    if not news_items and ticker.endswith(".TO"):
+        quote_type = None
+        try:
+            quote_type = stock.info.get("quoteType")
+        except Exception as e:
+            print(f"yfinance quoteType lookup failed for {ticker}: {e}")
+
+        if quote_type == "ETF":
+            if cached:
+                cached.sentiment = "unavailable"
+                cached.summary = "No news available for this ETF."
+                cached.last_updated = datetime.utcnow()
+            else:
+                cached = SentimentCache(ticker=ticker, sentiment="unavailable", summary="No news available for this ETF.")
+                db.add(cached)
+            db.commit()
+            raise HTTPException(status_code=404, detail=f"No news available for ticker '{ticker}'")
+        else:
+            base_ticker = ticker[:-3]  # strip ".TO"
+            try:
+                news_items = yf.Ticker(base_ticker).news
+            except Exception as e:
+                print(f"yfinance fallback news fetch failed for {base_ticker}: {e}")
 
     if not news_items:
         raise HTTPException(status_code=404, detail=f"No news available for ticker '{ticker}'")
@@ -534,6 +590,16 @@ SUMMARY: [two sentences explaining why, based on the headlines]"""
             messages=[{"role": "user", "content": prompt}]
         )
         raw_response = message.content[0].text.strip()
+
+        # message.usage carries the actual input/output token counts for
+        # THIS call - multiply by the per-token price to get real dollars
+        # spent, and print it so cost is visible in the uvicorn console
+        # without needing to store or return it anywhere.
+        cost_usd = (
+            message.usage.input_tokens / 1_000_000 * CLAUDE_SONNET_4_6_INPUT_COST_PER_MTOK
+            + message.usage.output_tokens / 1_000_000 * CLAUDE_SONNET_4_6_OUTPUT_COST_PER_MTOK
+        )
+        print(f"[sentiment] {ticker}: ${cost_usd:.6f} ({message.usage.input_tokens} in / {message.usage.output_tokens} out tokens)")
     except Exception as e:
         print(f"Claude API call failed for {ticker} sentiment: {e}")
         raise HTTPException(status_code=404, detail="Could not generate sentiment analysis")
@@ -556,6 +622,17 @@ SUMMARY: [two sentences explaining why, based on the headlines]"""
     # values, default to "neutral" instead of returning something unexpected
     if sentiment not in ("positive", "neutral", "negative"):
         sentiment = "neutral"
+
+    # Save/refresh the cache entry so the next request within the TTL above
+    # skips straight past the news fetch and Claude call entirely.
+    if cached:
+        cached.sentiment = sentiment
+        cached.summary = summary
+        cached.last_updated = datetime.utcnow()
+    else:
+        cached = SentimentCache(ticker=ticker, sentiment=sentiment, summary=summary)
+        db.add(cached)
+    db.commit()
 
     return {
         "ticker": ticker,
