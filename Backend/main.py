@@ -297,20 +297,40 @@ def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get
     # bought afterwards, which don't actually share any cost history with it.
     cost_tracking = {}
 
+    # NEW: a second, parallel ACB tracker containing ONLY today's buys, net
+    # of any sells that happened today too. This is what lets day_gain_loss
+    # below tell "shares I've held since before today" (correctly measured
+    # from previous_close) apart from "shares I bought today" (which should
+    # be measured from what I actually paid for them, not the previous
+    # close - I never experienced the move from market open to my buy).
+    # trade_date has no time component, so if a ticker is both bought AND
+    # sold today, we can't know the real order - we assume the sell comes
+    # out of today's newly-bought shares first. That's the conservative
+    # read: it avoids crediting "today's gain" to shares that, by the time
+    # you're looking at this, you may no longer even hold.
+    today = date.today()
+    today_tracking = {}
+
     for trade in trades:
         ticker = trade.ticker.upper()
         if ticker not in holdings:
             holdings[ticker] = 0
         if ticker not in cost_tracking:
             cost_tracking[ticker] = {"total_cost": 0, "total_qty": 0}
+        if ticker not in today_tracking:
+            today_tracking[ticker] = {"total_cost": 0, "total_qty": 0}
 
         qty = float(trade.quantity)
         price = float(trade.price_per_share)
+        is_today = trade.trade_date == today
 
         if trade.action == "buy":
             holdings[ticker] += qty
             cost_tracking[ticker]["total_cost"] += qty * price
             cost_tracking[ticker]["total_qty"] += qty
+            if is_today:
+                today_tracking[ticker]["total_cost"] += qty * price
+                today_tracking[ticker]["total_qty"] += qty
         elif trade.action == "sell":
             holdings[ticker] -= qty
             held_qty = cost_tracking[ticker]["total_qty"]
@@ -318,6 +338,15 @@ def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get
                 avg_cost_before_sell = cost_tracking[ticker]["total_cost"] / held_qty
                 cost_tracking[ticker]["total_cost"] -= avg_cost_before_sell * qty
                 cost_tracking[ticker]["total_qty"] -= qty
+            # Sells reduce today's bucket first (see comment above) - capped
+            # at whatever's actually in it, since a sell can also be selling
+            # older shares that were never in today's bucket to begin with.
+            today_qty = today_tracking[ticker]["total_qty"]
+            if today_qty > 0:
+                sell_from_today = min(qty, today_qty)
+                avg_cost_today_before_sell = today_tracking[ticker]["total_cost"] / today_qty
+                today_tracking[ticker]["total_cost"] -= avg_cost_today_before_sell * sell_from_today
+                today_tracking[ticker]["total_qty"] -= sell_from_today
 
     # Step 2: drop any ticker fully sold out (0 or negative shares left)
     holdings = {ticker: shares for ticker, shares in holdings.items() if shares > 0}
@@ -352,12 +381,40 @@ def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get
         total_gain_loss = (current_price - avg_cost) * shares
         total_gain_loss_percent = ((current_price - avg_cost) / avg_cost * 100) if avg_cost > 0 else 0
 
-        # NEW: today's gain/loss - compares current price to yesterday's
-        # close, regardless of when you actually bought in. This is what
-        # lets the frontend toggle between "today" and "all-time" views
-        # without needing a second API call - both numbers are always here.
-        day_gain_loss = (current_price - previous_close) * shares
-        day_gain_loss_percent = ((current_price - previous_close) / previous_close * 100) if previous_close > 0 else 0
+        # NEW: today's gain/loss - blended across two baselines instead of
+        # one flat "vs previous_close" for the whole position. Shares held
+        # since before today are measured from previous_close as before;
+        # shares bought today are measured from what you actually paid for
+        # them today (today_tracking, built above), since previous_close
+        # includes price movement from market open to your buy that you
+        # never actually experienced. For a position with no same-day buys
+        # this reduces to exactly the old formula - see the math check in
+        # the fix writeup for why. This is what lets the frontend toggle
+        # between "today" and "all-time" views without needing a second API
+        # call - both numbers are always here.
+        shares_bought_today = today_tracking[ticker]["total_qty"]
+        shares_from_before_today = shares - shares_bought_today
+        avg_price_paid_today = (
+            today_tracking[ticker]["total_cost"] / shares_bought_today
+            if shares_bought_today > 0 else 0
+        )
+
+        day_gain_loss = (
+            shares_from_before_today * (current_price - previous_close)
+            + shares_bought_today * (current_price - avg_price_paid_today)
+        )
+
+        # Denominator is each bucket's own baseline value, not a single
+        # previous_close - so day_gain_loss_percent reflects the blend too,
+        # not just "how much did the stock move today" (which is all the
+        # old formula could ever say, regardless of when you bought).
+        day_baseline_value = (
+            shares_from_before_today * previous_close
+            + shares_bought_today * avg_price_paid_today
+        )
+        day_gain_loss_percent = (
+            (day_gain_loss / day_baseline_value * 100) if day_baseline_value > 0 else 0
+        )
 
         holdings_list.append({
             "ticker": ticker,
@@ -401,7 +458,13 @@ def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get
     )
     # NEW: portfolio-wide today's gain/loss, derived from each holding's
     # day_gain_loss. Subtracting today's total gain from total_value gives
-    # yesterday's portfolio value, which is the correct denominator for %.
+    # each holding's own day_baseline_value summed up - "yesterday's close"
+    # for positions held since before today, but "what I paid today" for
+    # anything bought today (which never had a "yesterday" in the
+    # portfolio). Despite the variable name this isn't literally "the
+    # portfolio's value as of yesterday's close" once same-day buys are
+    # involved - it's the correct blended baseline for day_change_percent,
+    # which is the only thing this number is used for.
     total_day_gain_loss = sum(h["day_gain_loss"] for h in holdings_list)
     portfolio_value_yesterday = total_value - total_day_gain_loss
     day_change_percent = (
