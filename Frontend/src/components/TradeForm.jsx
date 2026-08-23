@@ -3,11 +3,10 @@ import { apiFetch } from "../api"
 
 // All the state, validation, and submit logic below is UNCHANGED from the
 // current version — same fields, same validate() rules, same handleSubmit
-// flow, same handleTickerBlur auto-price-fill behavior. This pass only
-// changes what gets returned at the bottom: a plain stacked <form> becomes
-// the mockup's two-card layout ("The trade" mechanics + "Your reasoning"),
-// and the raw <select>/<input type="number"> controls for action and
-// conviction become tappable button rows.
+// flow. This pass only changes what gets returned at the bottom: a plain
+// stacked <form> becomes the mockup's two-card layout ("The trade"
+// mechanics + "Your reasoning"), and the raw <select>/<input type="number">
+// controls for action and conviction become tappable button rows.
 function TradeForm({ onTradeLogged }) {
   const [form, setForm] = useState({
     ticker: "",
@@ -15,6 +14,7 @@ function TradeForm({ onTradeLogged }) {
     quantity: "",
     price_per_share: "",
     trade_date: "",
+    trade_time: "", // NEW - optional, powers the intraday price auto-fill
     thesis_text: "",
     conviction_score: 3,
     review_date: "",
@@ -22,10 +22,29 @@ function TradeForm({ onTradeLogged }) {
 
   const [status, setStatus] = useState(null)
   const [errorMessage, setErrorMessage] = useState("")
+  // NEW - set when the auto-filled price came from a daily-close fallback
+  // rather than an exact intraday match, so the user isn't misled into
+  // thinking it's more precise than it actually is.
+  const [priceNote, setPriceNote] = useState("")
+  // NEW - true only when the current price_per_share value came from our
+  // own auto-fill, not something the user typed. handlePriceAutofill needs
+  // this to tell "field is empty" apart from "field already has a value I
+  // set myself and can safely replace with a better one" - e.g. filling in
+  // a daily-close price on ticker+date blur, then refining it to an exact
+  // intraday match once trade_time is filled in too. A manually-typed
+  // price is never touched either way.
+  const [priceAutofilled, setPriceAutofilled] = useState(false)
 
   function handleChange(e) {
     const { name, value } = e.target
     setForm((prev) => ({ ...prev, [name]: value }))
+    // Manual edit overrides whatever the auto-fill suggested, so the
+    // precision note no longer applies and this is no longer a value
+    // we're free to silently replace.
+    if (name === "price_per_share") {
+      setPriceNote("")
+      setPriceAutofilled(false)
+    }
   }
 
   // New — replaces the old <select name="action">. Same effect (writes
@@ -61,10 +80,13 @@ function TradeForm({ onTradeLogged }) {
     }
 
     try {
+      // trade_time is optional - send null instead of "" when left blank,
+      // since the backend's Optional[time] field rejects an empty string.
+      const payload = { ...form, trade_time: form.trade_time || null }
       const response = await apiFetch("/trades", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(form),
+        body: JSON.stringify(payload),
       })
 
       if (!response.ok) {
@@ -76,8 +98,10 @@ function TradeForm({ onTradeLogged }) {
       setErrorMessage("")
       setForm({
         ticker: "", action: "buy", quantity: "", price_per_share: "",
-        trade_date: "", thesis_text: "", conviction_score: 3, review_date: "",
+        trade_date: "", trade_time: "", thesis_text: "", conviction_score: 3, review_date: "",
       })
+      setPriceNote("")
+      setPriceAutofilled(false)
       onTradeLogged()
     } catch (err) {
       setStatus("error")
@@ -85,18 +109,55 @@ function TradeForm({ onTradeLogged }) {
     }
   }
 
-  async function handleTickerBlur() {
-    if (!form.ticker || form.price_per_share !== "") return
+  // Auto-fills price_per_share as accurately as we can manage. Runs on
+  // blur of ticker, trade_date, AND trade_time - whichever field the user
+  // finishes last is what actually has enough info to fetch a price, so
+  // all three trigger the same check rather than just the ticker field.
+  //
+  // Without a trade_date yet, there's nothing to look up a historical
+  // price for, so this falls back to the old behavior: just grab whatever
+  // the current live price is, same as before this feature existed. Once
+  // a date is known, we ask /stock/{ticker}/price-at instead, which is
+  // aware of trade_time (for a precise intraday match, when available)
+  // and falls back to that day's close otherwise - see the backend
+  // endpoint's docstring for why intraday only works within ~7 days.
+  async function handlePriceAutofill() {
+    // Skip only when there's a price we DIDN'T set ourselves - i.e. the
+    // user typed it in by hand. A price we auto-filled earlier (from an
+    // ticker/date-only lookup, before trade_time was known) is fair game
+    // to replace with something more precise.
+    if (!form.ticker || (form.price_per_share !== "" && !priceAutofilled)) return
+
+    if (!form.trade_date) {
+      try {
+        const response = await apiFetch(`/stock/${form.ticker}`)
+        if (!response.ok) return
+        const data = await response.json()
+        if (data.price) {
+          setForm((prev) => ({ ...prev, price_per_share: data.price }))
+          setPriceNote("")
+          setPriceAutofilled(true)
+        }
+      } catch {
+        // Convenience feature — fails silently, user can type the price manually.
+      }
+      return
+    }
 
     try {
-      const response = await apiFetch(`/stock/${form.ticker}`)
+      const params = new URLSearchParams({ trade_date: form.trade_date })
+      if (form.trade_time) params.set("trade_time", form.trade_time)
+
+      const response = await apiFetch(`/stock/${form.ticker}/price-at?${params}`)
       if (!response.ok) return
 
       const data = await response.json()
       if (data.price) {
         setForm((prev) => ({ ...prev, price_per_share: data.price }))
+        setPriceNote(data.precision === "daily-close" ? data.note : "")
+        setPriceAutofilled(true)
       }
-    } catch (err) {
+    } catch {
       // Convenience feature — fails silently, user can type the price manually.
     }
   }
@@ -118,7 +179,7 @@ function TradeForm({ onTradeLogged }) {
               name="ticker"
               value={form.ticker}
               onChange={(e) => setForm((prev) => ({ ...prev, ticker: e.target.value.toUpperCase() }))}
-              onBlur={handleTickerBlur}
+              onBlur={handlePriceAutofill}
               placeholder="e.g. AAPL"
             />
           </div>
@@ -151,18 +212,48 @@ function TradeForm({ onTradeLogged }) {
             <div className="field">
               <label>Price / share</label>
               <input name="price_per_share" type="number" value={form.price_per_share} onChange={handleChange} />
+              {/* NEW - only shown when the auto-filled price came from a
+                  daily close rather than an exact intraday match, so the
+                  user knows it's a less precise number. Clears itself as
+                  soon as the price field is edited by hand. */}
+              {priceNote && (
+                <p style={{ margin: "4px 0 0", fontSize: "var(--text-xs)", color: "var(--color-text-secondary)" }}>
+                  {priceNote}
+                </p>
+              )}
             </div>
           </div>
 
           <div className="row-2">
             <div className="field">
               <label>Trade date</label>
-              <input name="trade_date" type="date" value={form.trade_date} onChange={handleChange} />
+              <input
+                name="trade_date"
+                type="date"
+                value={form.trade_date}
+                onChange={handleChange}
+                onBlur={handlePriceAutofill}
+              />
             </div>
             <div className="field">
-              <label>Review date</label>
-              <input name="review_date" type="date" value={form.review_date} onChange={handleChange} />
+              {/* NEW - optional. Powers an exact intraday price match
+                  instead of the daily-close fallback, but only within
+                  yfinance's ~7-day intraday history window - see
+                  handlePriceAutofill's comment for why. */}
+              <label>Trade time (optional)</label>
+              <input
+                name="trade_time"
+                type="time"
+                value={form.trade_time}
+                onChange={handleChange}
+                onBlur={handlePriceAutofill}
+              />
             </div>
+          </div>
+
+          <div className="field">
+            <label>Review date</label>
+            <input name="review_date" type="date" value={form.review_date} onChange={handleChange} />
           </div>
         </div>
 

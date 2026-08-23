@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Numeric, Date, DateTime, ForeignKey, Text
+from sqlalchemy import Column, Integer, String, Numeric, Date, DateTime, ForeignKey, Text, Time
 from sqlalchemy.sql import func
 from database import Base
 
@@ -45,6 +45,11 @@ class Trade(Base):
     quantity = Column(Numeric, nullable=False)
     price_per_share = Column(Numeric, nullable=False)
     trade_date = Column(Date, nullable=False)
+    # NEW - optional, only used to pin down which intraday price bar to
+    # auto-fill price_per_share with at log time (see /stock/{ticker}/price-at).
+    # Assumed to be US/Eastern market time - both US tickers and .TO (TSX)
+    # tickers trade on that clock.
+    trade_time = Column(Time, nullable=True)
     thesis_text = Column(Text, nullable=True)
     conviction_score = Column(Integer, nullable=True)   # 1-5
     review_date = Column(Date, nullable=True)
