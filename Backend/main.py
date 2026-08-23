@@ -17,7 +17,7 @@ from models import Trade
 from pydantic import BaseModel
 from datetime import date
 from models import Trade, PriceCache, User, UserProfile, ChatMessage, SentimentCache
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, time
 
 #FOR THE CLAUDE API
 from dotenv import load_dotenv
@@ -102,6 +102,7 @@ class TradeCreate(BaseModel):
     quantity: float
     price_per_share: float
     trade_date: date
+    trade_time: Optional[time] = None  # NEW - optional, powers the intraday price auto-fill
     thesis_text: str
     conviction_score: int
     review_date: date
@@ -247,6 +248,99 @@ def get_stock(ticker: str, db: Session = Depends(get_db)):
         "source": "cache/yfinance"
     }
 
+# Given a ticker and the date (and optionally time) a trade happened,
+# returns the best price we can find for that exact moment - used by
+# TradeForm to auto-fill price_per_share more accurately than "whatever
+# the price is right now" once a trade_date is known.
+#
+# Yahoo only retains 1-minute intraday history for roughly the last 7
+# days. Inside that window (and only when a trade_time was actually
+# given) we fetch 1-minute bars - including pre/post-market, since a
+# trade logged at e.g. 8pm is after the 4pm regular-hours close and
+# would otherwise have no real bar anywhere near it - and return
+# whichever bar is closest to the requested time - "intraday" precision.
+# If the closest bar we can find is still more than INTRADAY_MATCH_TOLERANCE_MINUTES
+# away (e.g. the request lands overnight, when nothing trades at all,
+# even pre/post-market), that's not a real match - we fall through to
+# the daily-close fallback below instead of mislabeling a distant bar as
+# precise. Outside the 7-day window, or when no time was given at all,
+# we go straight to that fallback - "daily-close" precision - and say so
+# explicitly in the response, since it's a meaningfully less precise
+# number and the frontend should tell the user that rather than passing
+# it off as exact.
+# NOT user-scoped - same as /stock/{ticker}, a public price lookup.
+INTRADAY_MATCH_TOLERANCE_MINUTES = 30
+
+@app.get("/stock/{ticker}/price-at")
+def get_price_at(ticker: str, trade_date: date, trade_time: str = None):
+    ticker = ticker.upper()
+    stock = yf.Ticker(ticker)
+
+    days_ago = (datetime.now().date() - trade_date).days
+    intraday_available = 0 <= days_ago <= 7
+
+    if intraday_available and trade_time:
+        hist = None
+        try:
+            hour, minute = (int(part) for part in trade_time.split(":")[:2])
+            requested_dt = datetime.combine(trade_date, time(hour, minute))
+            hist = stock.history(
+                start=trade_date,
+                end=trade_date + timedelta(days=1),
+                interval="1m",
+                prepost=True,
+            )
+        except Exception as e:
+            print(f"yfinance intraday history fetch failed for {ticker}: {e}")
+
+        if hist is not None and not hist.empty:
+            # hist.index is timezone-aware in the exchange's local time
+            # (Eastern, for both US tickers and .TO/TSX ones) - strip
+            # tzinfo so it compares against our naive requested_dt, which
+            # we're treating as Eastern too (see models.py's trade_time
+            # comment for why that assumption is safe here).
+            hist_naive_index = hist.index.tz_localize(None)
+            closest_pos = hist_naive_index.get_indexer([requested_dt], method="nearest")[0]
+            matched_time = hist_naive_index[closest_pos]
+            gap_minutes = abs((matched_time.to_pydatetime() - requested_dt).total_seconds()) / 60
+
+            if gap_minutes <= INTRADAY_MATCH_TOLERANCE_MINUTES:
+                price = float(hist["Close"].iloc[closest_pos])
+                return {
+                    "ticker": ticker,
+                    "price": round(price, 4),
+                    "precision": "intraday",
+                    "matched_time": matched_time.strftime("%H:%M"),
+                }
+            # else: closest bar is too far from what was asked for (e.g.
+            # requested time fell overnight) - fall through to daily-close.
+
+    # Fallback: that day's closing price. If trade_date fell on a
+    # weekend/holiday, history() just returns whatever trading days
+    # actually exist in the range, so we look back a few extra days and
+    # take the most recent bar - effectively "last close on or before
+    # trade_date."
+    try:
+        hist = stock.history(
+            start=trade_date - timedelta(days=5),
+            end=trade_date + timedelta(days=1),
+            interval="1d",
+        )
+    except Exception as e:
+        print(f"yfinance daily history fetch failed for {ticker}: {e}")
+        raise HTTPException(status_code=404, detail=f"Could not fetch price history for '{ticker}'")
+
+    if hist.empty:
+        raise HTTPException(status_code=404, detail=f"No price data found for '{ticker}' around {trade_date}")
+
+    price = float(hist["Close"].iloc[-1])
+    return {
+        "ticker": ticker,
+        "price": round(price, 4),
+        "precision": "daily-close",
+        "note": "Exact intraday price isn't available this far back - using that day's closing price instead.",
+    }
+
 # Creates a new trade. Takes JSON matching the TradeCreate shape above,
 # saves it to the database, and returns the saved trade (now with an id).
 # PROTECTED + SCOPED: requires login, and the new trade is stamped with
@@ -261,6 +355,7 @@ def create_trade(trade: TradeCreate, db: Session = Depends(get_db), current_user
         quantity=trade.quantity,
         price_per_share=trade.price_per_share,
         trade_date=trade.trade_date,
+        trade_time=trade.trade_time,
         thesis_text=trade.thesis_text,
         conviction_score=trade.conviction_score,
         review_date=trade.review_date,
