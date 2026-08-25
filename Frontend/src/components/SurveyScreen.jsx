@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { apiFetch } from "../api"
 
 // Each question's options as [value, label] pairs - value is what gets sent
@@ -21,15 +21,6 @@ const QUESTIONS = [
       ["income", "Generating income"],
       ["preservation", "Preserving capital"],
       ["speculation", "Speculation / high-risk opportunities"],
-    ],
-  },
-  {
-    key: "trading_style",
-    label: "How would you describe your trading style?",
-    options: [
-      ["buy_and_hold", "Buy and hold"],
-      ["active", "Active trading"],
-      ["swing", "Swing trading"],
     ],
   },
   {
@@ -65,21 +56,73 @@ const SECTOR_OPTIONS = [
   "tech", "healthcare", "energy", "financials", "consumer", "industrials", "real_estate",
 ]
 
-function SurveyScreen({ onComplete }) {
+// Multi-select, unlike the QUESTIONS array above - most people don't trade
+// just one way (e.g. buy-and-hold a core portfolio while also swing trading
+// a small slice), so forcing a single pick here was misrepresenting how
+// people actually invest. Same [value, label] shape as QUESTIONS options,
+// same toggle-button multi-select pattern as SECTOR_OPTIONS below.
+const TRADING_STYLE_OPTIONS = [
+  ["buy_and_hold", "Buy and hold"],
+  ["active", "Active trading"],
+  ["swing", "Swing trading"],
+]
+
+// editMode: false for the required first-time onboarding flow (App.jsx
+// renders this when hasProfile is false, blocking the rest of the app
+// until it's completed). true when opened later via the sidebar's
+// "Change Context" button to revisit answers already on file - same form,
+// same POST /profile submit (which already upserts either way - see
+// submit_profile on the backend), just pre-filled from GET /profile
+// first, and worded/routed slightly differently since there's no longer
+// anything to "unblock."
+function SurveyScreen({ onComplete, editMode = false }) {
   // One object holding every answer, keyed by question key - same pattern
   // TradeForm uses for its own form state.
   const [answers, setAnswers] = useState({
     risk_tolerance: "",
     investing_goals: "",
-    trading_style: "",
     time_horizon: "",
     income_bracket: "",
     experience_level: "",
   })
+  const [tradingStyles, setTradingStyles] = useState([])
   const [sectors, setSectors] = useState([])
   const [biggestFear, setBiggestFear] = useState("")
   const [error, setError] = useState(null)
   const [submitting, setSubmitting] = useState(false)
+  // NEW - only relevant in editMode, while GET /profile (below) is still
+  // in flight. Prevents the form from flashing empty/default answers for
+  // a moment before the real saved ones arrive.
+  const [loadingProfile, setLoadingProfile] = useState(editMode)
+
+  // Pre-fills every field from the user's existing profile when opened in
+  // editMode. Mirrors get_profile's response shape exactly - trading_style
+  // and sectors_of_interest already arrive as arrays (backend splits the
+  // comma-separated DB value), so they can go straight into tradingStyles/
+  // sectors with no extra parsing.
+  useEffect(() => {
+    if (!editMode) return
+
+    apiFetch("/profile")
+      .then((response) => {
+        if (!response.ok) throw new Error("Failed to load your current profile")
+        return response.json()
+      })
+      .then((data) => {
+        setAnswers({
+          risk_tolerance: data.risk_tolerance,
+          investing_goals: data.investing_goals,
+          time_horizon: data.time_horizon,
+          income_bracket: data.income_bracket,
+          experience_level: data.experience_level,
+        })
+        setTradingStyles(data.trading_style)
+        setSectors(data.sectors_of_interest)
+        setBiggestFear(data.biggest_fear || "")
+      })
+      .catch((err) => setError(err.message))
+      .finally(() => setLoadingProfile(false))
+  }, [editMode])
 
   function handleAnswer(key, value) {
     setAnswers((prev) => ({ ...prev, [key]: value }))
@@ -91,14 +134,23 @@ function SurveyScreen({ onComplete }) {
     )
   }
 
+  function toggleTradingStyle(style) {
+    setTradingStyles((prev) =>
+      prev.includes(style) ? prev.filter((s) => s !== style) : [...prev, style]
+    )
+  }
+
   // Checks every required (multiple-choice) field has an answer before
-  // allowing submission - the free-text field and sectors are intentionally
-  // excluded, since those are optional per the product decision to never
-  // block someone on a field they might not want to answer.
+  // allowing submission - the free-text field is intentionally excluded,
+  // since it's optional per the product decision to never block someone
+  // on a field they might not want to answer. trading_style and sectors
+  // are multi-select, so they're checked separately from the QUESTIONS
+  // loop (a "not empty" check, not an equality check).
   function validate() {
     for (const q of QUESTIONS) {
       if (!answers[q.key]) return `Please answer: "${q.label}"`
     }
+    if (tradingStyles.length === 0) return "Please select at least one trading style."
     if (sectors.length === 0) return "Please select at least one sector of interest."
     return null
   }
@@ -120,6 +172,7 @@ function SurveyScreen({ onComplete }) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           ...answers,
+          trading_style: tradingStyles,
           sectors_of_interest: sectors,
           // Send null rather than an empty string when left blank - matches
           // the backend's Optional[str] = None expectation, though either
@@ -162,6 +215,14 @@ function SurveyScreen({ onComplete }) {
     fontSize: "var(--text-sm)",
   })
 
+  if (loadingProfile) {
+    return (
+      <div style={{ display: "flex", justifyContent: "center", padding: "40px 20px" }}>
+        <p style={{ color: "var(--color-text-secondary)" }}>Loading your current answers...</p>
+      </div>
+    )
+  }
+
   return (
     <div style={{ display: "flex", justifyContent: "center", padding: "40px 20px" }}>
       <form
@@ -177,7 +238,7 @@ function SurveyScreen({ onComplete }) {
         }}
       >
         <h2 style={{ marginTop: 0, fontFamily: "var(--font-serif)" }}>
-          Tell us about your investing style
+          {editMode ? "Update your investing profile" : "Tell us about your investing style"}
         </h2>
         <p style={{ color: "var(--color-text-secondary)", fontSize: "var(--text-sm)", marginTop: 0, marginBottom: "var(--space-lg)" }}>
           This helps InnerStock give you analysis that actually fits how you invest.
@@ -200,6 +261,22 @@ function SurveyScreen({ onComplete }) {
             </div>
           </label>
         ))}
+
+        <label style={labelStyle}>
+          How would you describe your trading style? (select all that apply)
+          <div>
+            {TRADING_STYLE_OPTIONS.map(([value, optLabel]) => (
+              <button
+                key={value}
+                type="button"
+                onClick={() => toggleTradingStyle(value)}
+                style={optionButtonStyle(tradingStyles.includes(value))}
+              >
+                {optLabel}
+              </button>
+            ))}
+          </div>
+        </label>
 
         <label style={labelStyle}>
           Which sectors are you most interested in? (select all that apply)
@@ -244,7 +321,7 @@ function SurveyScreen({ onComplete }) {
             marginTop: "var(--space-sm)",
           }}
         >
-          {submitting ? "Saving..." : "Continue to dashboard"}
+          {submitting ? "Saving..." : editMode ? "Save changes" : "Continue to dashboard"}
         </button>
       </form>
     </div>

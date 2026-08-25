@@ -4,6 +4,7 @@ import {
   IconClock,
   IconChartBar,
   IconMessageCircle,
+  IconSettings,
 } from "@tabler/icons-react"
 
 // One nav row. Pure presentation — active state and the click handler are
@@ -25,7 +26,7 @@ function NavItem({ label, active, onClick, icon }) {
 // `.main` and is responsible for its OWN topbar/content — Layout only
 // owns the parts that are identical on every screen: the brand mark,
 // the four nav items, and the logout control.
-function Layout({ activeView, onNavigate, onLogout, children }) {
+function Layout({ activeView, onNavigate, onLogout, onChangeContext, children }) {
   return (
     <div className="app-shell">
       <div className="sidebar">
@@ -65,6 +66,18 @@ function Layout({ activeView, onNavigate, onLogout, children }) {
             the bottom of the sidebar regardless of how many nav items exist
             above it, the same trick used for a sticky footer. */}
         <div className="nav-footer">
+          {/* Reuses NavItem rather than a one-off button, so this row looks
+              and behaves exactly like Dashboard/Log trade/etc. above it -
+              including highlighting while the user is actually on that
+              screen. Opens SurveyScreen in edit mode (App.jsx wires
+              onChangeContext to activeView "editprofile") so previously
+              entered survey answers can be revisited and changed. */}
+          <NavItem
+            label="Change Context"
+            active={activeView === "editprofile"}
+            onClick={onChangeContext}
+            icon={<IconSettings size={17} />}
+          />
           <div className="user-chip">
             <div className="avatar">
               <IconChartBar size={13} />

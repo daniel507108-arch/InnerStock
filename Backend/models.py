@@ -21,7 +21,7 @@ class UserProfile(Base):
     # Required multiple-choice fields
     risk_tolerance = Column(String, nullable=False)      # e.g. "low", "medium", "high"
     investing_goals = Column(String, nullable=False)     # e.g. "growth", "income", "preservation", "speculation"
-    trading_style = Column(String, nullable=False)       # e.g. "buy_and_hold", "active", "swing"
+    trading_style = Column(String, nullable=False)        # multi-select, comma-separated e.g. "buy_and_hold,swing" - same pattern as sectors_of_interest below
     time_horizon = Column(String, nullable=False)        # e.g. "under_1y", "1_to_5y", "5y_plus"
     income_bracket = Column(String, nullable=False)      # e.g. "under_50k", "50k_100k", "100k_plus"
     experience_level = Column(String, nullable=False)    # e.g. "beginner", "intermediate", "experienced"
