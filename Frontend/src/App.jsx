@@ -86,10 +86,22 @@ function App() {
   }
 
   return (
-    <Layout activeView={activeView} onNavigate={setActiveView} onLogout={handleLogout}>
+    <Layout
+      activeView={activeView}
+      onNavigate={setActiveView}
+      onLogout={handleLogout}
+      onChangeContext={() => setActiveView('editprofile')}
+    >
       {activeView === 'dashboard' && (
   <Dashboard refreshKey={refreshKey} onNavigate={setActiveView} />
 )}
+      {activeView === 'editprofile' && (
+        // Same component as the required first-time survey, just in
+        // editMode (pre-fills from the existing profile) - "done" here
+        // means back to the dashboard, not flipping hasProfile, since
+        // that flag is only meaningful for the initial onboarding gate.
+        <SurveyScreen editMode onComplete={() => setActiveView('dashboard')} />
+      )}
       {activeView === 'logtrade' && (
   <>
     <div className="topbar">

@@ -129,7 +129,7 @@ class TokenResponse(BaseModel):
 class ProfileSubmit(BaseModel):
     risk_tolerance: str
     investing_goals: str
-    trading_style: str
+    trading_style: List[str]  # multi-select, comma-joined for storage - same pattern as sectors_of_interest below
     time_horizon: str
     income_bracket: str
     experience_level: str
@@ -1011,11 +1011,12 @@ def submit_profile(payload: ProfileSubmit, db: Session = Depends(get_db), curren
     existing = db.query(UserProfile).filter(UserProfile.user_id == current_user.id).first()
 
     sectors_str = ",".join(payload.sectors_of_interest)
+    trading_style_str = ",".join(payload.trading_style)
 
     if existing:
         existing.risk_tolerance = payload.risk_tolerance
         existing.investing_goals = payload.investing_goals
-        existing.trading_style = payload.trading_style
+        existing.trading_style = trading_style_str
         existing.time_horizon = payload.time_horizon
         existing.income_bracket = payload.income_bracket
         existing.experience_level = payload.experience_level
@@ -1029,7 +1030,7 @@ def submit_profile(payload: ProfileSubmit, db: Session = Depends(get_db), curren
             user_id=current_user.id,
             risk_tolerance=payload.risk_tolerance,
             investing_goals=payload.investing_goals,
-            trading_style=payload.trading_style,
+            trading_style=trading_style_str,
             time_horizon=payload.time_horizon,
             income_bracket=payload.income_bracket,
             experience_level=payload.experience_level,
@@ -1054,7 +1055,7 @@ def get_profile(db: Session = Depends(get_db), current_user: User = Depends(get_
     return {
         "risk_tolerance": profile.risk_tolerance,
         "investing_goals": profile.investing_goals,
-        "trading_style": profile.trading_style,
+        "trading_style": profile.trading_style.split(","),
         "time_horizon": profile.time_horizon,
         "income_bracket": profile.income_bracket,
         "experience_level": profile.experience_level,
