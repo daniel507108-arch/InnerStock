@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Numeric, Date, DateTime, ForeignKey, Text, Time
+from sqlalchemy import Column, Integer, String, Numeric, Date, DateTime, ForeignKey, Text, Time, UniqueConstraint
 from sqlalchemy.sql import func
 from database import Base
 
@@ -102,3 +102,13 @@ class ChatMessage(Base):
     role = Column(String, nullable=False)     # "user" or "assistant"
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, server_default=func.now())
+
+class Watchlist(Base):
+    __tablename__ = "watchlist"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    ticker = Column(String, nullable=False)
+    added_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("user_id", "ticker", name="uq_watchlist_user_ticker"),)
