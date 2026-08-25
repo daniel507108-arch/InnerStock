@@ -102,7 +102,7 @@ class TradeCreate(BaseModel):
     quantity: float
     price_per_share: float
     trade_date: date
-    trade_time: Optional[time] = None  # NEW - optional, powers the intraday price auto-fill
+    trade_time: time  # NEW - required, powers the intraday price auto-fill
     thesis_text: str
     conviction_score: int
     review_date: date
