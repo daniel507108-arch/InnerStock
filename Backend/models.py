@@ -45,8 +45,13 @@ class Trade(Base):
     quantity = Column(Numeric, nullable=False)
     price_per_share = Column(Numeric, nullable=False)
     trade_date = Column(Date, nullable=False)
-    # NEW - optional, only used to pin down which intraday price bar to
-    # auto-fill price_per_share with at log time (see /stock/{ticker}/price-at).
+    # NEW - required when logging a trade manually via POST /trades (see
+    # TradeCreate), to pin down which intraday price bar to auto-fill
+    # price_per_share with at log time (see /stock/{ticker}/price-at).
+    # Nullable at the DB level anyway, since CSV-imported trades (see
+    # import_trades_wealthsimple) never have a time and build Trade rows
+    # directly, bypassing TradeCreate's validation entirely - and every
+    # trade imported before this feature existed has no time on record.
     # Assumed to be US/Eastern market time - both US tickers and .TO (TSX)
     # tickers trade on that clock.
     trade_time = Column(Time, nullable=True)

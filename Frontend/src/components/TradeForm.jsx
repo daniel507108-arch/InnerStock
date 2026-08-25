@@ -14,7 +14,7 @@ function TradeForm({ onTradeLogged }) {
     quantity: "",
     price_per_share: "",
     trade_date: "",
-    trade_time: "", // NEW - optional, powers the intraday price auto-fill
+    trade_time: "", // NEW - required, powers the intraday price auto-fill
     thesis_text: "",
     conviction_score: 3,
     review_date: "",
@@ -63,6 +63,7 @@ function TradeForm({ onTradeLogged }) {
     if (!form.quantity || Number(form.quantity) <= 0) return "Quantity must be greater than 0."
     if (!form.price_per_share || Number(form.price_per_share) <= 0) return "Price must be greater than 0."
     if (!form.trade_date) return "Trade date is required."
+    if (!form.trade_time) return "Trade time is required."
     if (!form.thesis_text.trim()) return "You must write a thesis before logging this trade."
     if (form.conviction_score < 1 || form.conviction_score > 5) return "Conviction score must be between 1 and 5."
     if (!form.review_date) return "Review date is required."
@@ -80,13 +81,10 @@ function TradeForm({ onTradeLogged }) {
     }
 
     try {
-      // trade_time is optional - send null instead of "" when left blank,
-      // since the backend's Optional[time] field rejects an empty string.
-      const payload = { ...form, trade_time: form.trade_time || null }
       const response = await apiFetch("/trades", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(form),
       })
 
       if (!response.ok) {
@@ -236,17 +234,18 @@ function TradeForm({ onTradeLogged }) {
               />
             </div>
             <div className="field">
-              {/* NEW - optional. Powers an exact intraday price match
-                  instead of the daily-close fallback, but only within
-                  yfinance's ~7-day intraday history window - see
-                  handlePriceAutofill's comment for why. */}
-              <label>Trade time (optional)</label>
+              {/* NEW - required. Powers the price auto-fill: within
+                  yfinance's ~7-day intraday history window it gets an
+                  exact match, otherwise get_price_at falls back to that
+                  day's close - see handlePriceAutofill's comment for why. */}
+              <label>Trade time</label>
               <input
                 name="trade_time"
                 type="time"
                 value={form.trade_time}
                 onChange={handleChange}
                 onBlur={handlePriceAutofill}
+                required
               />
             </div>
           </div>
