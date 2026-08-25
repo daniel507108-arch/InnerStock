@@ -16,7 +16,7 @@ from models import Trade
 # so FastAPI can validate it automatically before our code even runs
 from pydantic import BaseModel
 from datetime import date
-from models import Trade, PriceCache, User, UserProfile, ChatMessage, SentimentCache
+from models import Trade, PriceCache, User, UserProfile, ChatMessage, SentimentCache, Watchlist
 from datetime import date, datetime, timedelta, time
 
 #FOR THE CLAUDE API
@@ -108,6 +108,9 @@ class TradeCreate(BaseModel):
     review_date: date
 
 from pydantic import BaseModel, EmailStr
+
+class WatchlistAdd(BaseModel):
+    ticker: str
 
 class UserSignup(BaseModel):
     name: str
@@ -1400,3 +1403,80 @@ def get_incomplete_trades(db: Session = Depends(get_db), current_user: User = De
         .all()
     )
     return {"trades": trades}
+
+
+@app.get("/watchlist")
+def get_watchlist(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    entries = db.query(Watchlist).filter(Watchlist.user_id == current_user.id).all()
+    result = []
+    for entry in entries:
+        cached = get_or_fetch_price(entry.ticker, db)
+        day_change_percent = None
+        if cached and cached.previous_close and cached.current_price:
+            day_change_percent = float((cached.current_price - cached.previous_close) / cached.previous_close * 100)
+        result.append({
+            "ticker": entry.ticker,
+            "added_at": entry.added_at,
+            "current_price": float(cached.current_price) if cached else None,
+            "day_change_percent": day_change_percent,
+        })
+    return {"watchlist": result}
+
+
+@app.post("/watchlist")
+def add_to_watchlist(payload: WatchlistAdd, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ticker = payload.ticker.upper()
+
+    cached = get_or_fetch_price(ticker, db)
+    if not cached:
+        raise HTTPException(status_code=404, detail=f"Ticker '{ticker}' not found or has no price data")
+
+    existing = db.query(Watchlist).filter(
+        Watchlist.user_id == current_user.id, Watchlist.ticker == ticker
+    ).first()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"'{ticker}' is already on your watchlist")
+
+    entry = Watchlist(user_id=current_user.id, ticker=ticker)
+    db.add(entry)
+    db.commit()
+    return {"success": True, "ticker": ticker}
+
+
+@app.delete("/watchlist/{ticker}")
+def remove_from_watchlist(ticker: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    ticker = ticker.upper()
+    entry = db.query(Watchlist).filter(
+        Watchlist.user_id == current_user.id, Watchlist.ticker == ticker
+    ).first()
+    if not entry:
+        raise HTTPException(status_code=404, detail=f"'{ticker}' is not on your watchlist")
+    db.delete(entry)
+    db.commit()
+    return {"success": True}
+
+@app.get("/stock/{ticker}/history")
+def get_stock_history(ticker: str, range: str = "1M", db: Session = Depends(get_db)):
+    range_map = {
+        "1D": ("1d", "5m"),
+        "1W": ("5d", "30m"),
+        "1M": ("1mo", "1d"),
+        "3M": ("3mo", "1d"),
+        "1Y": ("1y", "1wk"),
+        "ALL": ("max", "1mo"),
+    }
+    period, interval = range_map.get(range.upper(), ("1mo", "1d"))
+
+    try:
+        hist = yf.Ticker(ticker.upper()).history(period=period, interval=interval)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Could not fetch history for '{ticker.upper()}'")
+
+    if hist.empty:
+        raise HTTPException(status_code=404, detail=f"No history data for '{ticker.upper()}'")
+
+    points = [
+        {"date": ts.isoformat(), "close": float(row["Close"])}
+        for ts, row in hist.iterrows()
+    ]
+    return {"ticker": ticker.upper(), "range": range.upper(), "points": points}

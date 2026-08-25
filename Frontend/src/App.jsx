@@ -8,6 +8,7 @@ import Dashboard from './components/Dashboard'
 import ThesisReview from './components/ThesisReview'
 import ChatScreen from './components/ChatScreen'
 import { apiFetch } from './api'
+import SearchPage from './components/SearchPage'
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem("token"))
@@ -118,6 +119,9 @@ function App() {
       {activeView === 'thesisreview' && (
         <ThesisReview />
       )}
+      {activeView === 'search' && (
+  <SearchPage />
+)}
       {activeView === 'advisor' && (
         <ChatScreen />
       )}

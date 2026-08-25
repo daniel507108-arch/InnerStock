@@ -4,8 +4,10 @@ import {
   IconClock,
   IconChartBar,
   IconMessageCircle,
+  IconSearch,
   IconSettings,
 } from "@tabler/icons-react"
+import SidebarWatchlist from "./SidebarWatchlist"
 
 // One nav row. Pure presentation — active state and the click handler are
 // both owned by the parent, this component just renders what it's told.
@@ -34,34 +36,17 @@ function Layout({ activeView, onNavigate, onLogout, onChangeContext, children })
           <div className="brand-mark" />
           <span className="brand-name">InnerStock</span>
         </div>
-
         <nav className="nav">
-          <NavItem
-            label="Dashboard"
-            active={activeView === "dashboard"}
-            onClick={() => onNavigate("dashboard")}
-            icon={<IconLayoutDashboard size={17} />}
-          />
-          <NavItem
-            label="Log trade"
-            active={activeView === "logtrade"}
-            onClick={() => onNavigate("logtrade")}
-            icon={<IconPlus size={17} />}
-          />
-          <NavItem
-            label="Thesis review"
-            active={activeView === "thesisreview"}
-            onClick={() => onNavigate("thesisreview")}
-            icon={<IconClock size={17} />}
-          />
-          <NavItem
-            label="Advisor"
-            active={activeView === "advisor"}
-            onClick={() => onNavigate("advisor")}
-            icon={<IconMessageCircle size={17} />}
-          />
+          <NavItem label="Dashboard" active={activeView === "dashboard"} onClick={() => onNavigate("dashboard")} icon={<IconLayoutDashboard size={16} />} />
+          <NavItem label="Log trade" active={activeView === "logtrade"} onClick={() => onNavigate("logtrade")} icon={<IconPlus size={16} />} />
+          <NavItem label="Thesis review" active={activeView === "thesisreview"} onClick={() => onNavigate("thesisreview")} icon={<IconClock size={16} />} />
+          <NavItem label="Search" active={activeView === "search"} onClick={() => onNavigate("search")} icon={<IconSearch size={16} />} />
+          <NavItem label="Advisor" active={activeView === "advisor"} onClick={() => onNavigate("advisor")} icon={<IconMessageCircle size={16} />} />
         </nav>
 
+        <SidebarWatchlist onNavigate={onNavigate} />
+
+        
         {/* margin-top: auto (set on .nav-footer in theme.css) pins this to
             the bottom of the sidebar regardless of how many nav items exist
             above it, the same trick used for a sticky footer. */}

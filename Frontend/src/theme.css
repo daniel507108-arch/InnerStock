@@ -771,3 +771,64 @@ input, select, textarea, button {
   .trade-grid { grid-template-columns: 1fr; }
   .chat-page { max-width: 100%; }
 }
+
+.sidebar-watchlist {
+  padding: 0 var(--space-md);
+  margin-top: var(--space-lg);
+}
+
+.sidebar-watchlist-title {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: var(--space-sm);
+}
+
+.sidebar-watchlist-empty {
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+
+.sidebar-watchlist-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  padding: 4px 0;
+  font-size: var(--text-sm);
+}
+
+.sidebar-watchlist-ticker {
+  flex: 1;
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+.sidebar-watchlist-change {
+  font-size: var(--text-xs);
+}
+
+.sidebar-watchlist-remove {
+  background: transparent;
+  border: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: var(--text-sm);
+  padding: 0 2px;
+  line-height: 1;
+}
+
+.sidebar-watchlist-remove:hover {
+  color: var(--color-danger);
+}
+
+.sidebar-watchlist-add {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  margin-top: var(--space-xs);
+}
+
+.sidebar-watchlist-add:hover {
+  color: var(--color-accent);
+}
