@@ -1,13 +1,23 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useRef } from "react"
 import StatsCards from "./StatsCards"
 import HoldingsTable from "./HoldingsTable"
 import { apiFetch } from "../api"
 
-// Owns the ONE /holdings fetch for the whole dashboard view, same as
-// before — no data-fetching logic changes in this pass, only the JSX
-// returned at the bottom. `onNavigate` is new: it lets the "+ Log a
-// trade" button in the topbar jump straight to the trade-log tab. Pass
-// `activeView`'s setter down from App.jsx (see roadmap step 5).
+// How often the dashboard re-polls /holdings for updated prices while the
+// tab is open. Paired with the backend's PRICE_CACHE_TTL_SECONDS (main.py) -
+// kept slightly longer than that TTL so a poll actually lands on a fresh
+// yfinance fetch instead of just re-reading the same cache row. This closes
+// the "reload the page to see the real price" gap; it does not make prices
+// literally tick-by-tick (yfinance's free data itself runs a bit behind the
+// live market) - see the price-lag writeup for the tradeoffs.
+const PRICE_POLL_INTERVAL_MS = 60_000
+
+// Owns the ONE /holdings fetch for the whole dashboard view. `onNavigate` is
+// new: it lets the "+ Log a trade" button in the topbar jump straight to the
+// trade-log tab. Pass `activeView`'s setter down from App.jsx (see roadmap
+// step 5). Also new: the /holdings fetch now repeats on an interval instead
+// of firing once per mount, so prices stay current without the user having
+// to manually reload.
 function Dashboard({ refreshKey, onNavigate }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
@@ -15,21 +25,53 @@ function Dashboard({ refreshKey, onNavigate }) {
   const [accuracyPercent, setAccuracyPercent] = useState(null)
   const [gradedCount, setGradedCount] = useState(null)
 
+  // Mirrors `data` so the poll's error handler can check "do we already have
+  // something on screen" without depending on `data` directly - depending on
+  // it would mean this whole effect (and its interval) tears down and
+  // re-fires on every successful load, which defeats the point of an
+  // interval. The ref always reflects the latest value; state is still what
+  // actually drives rendering.
+  const hasDataRef = useRef(false)
+
   useEffect(() => {
-    setLoading(true)
-    apiFetch("/holdings")
-      .then((response) => {
-        if (!response.ok) throw new Error("Failed to load holdings")
-        return response.json()
-      })
-      .then((result) => {
-        setData(result)
-        setLoading(false)
-      })
-      .catch((err) => {
-        setError(err.message)
-        setLoading(false)
-      })
+    let cancelled = false
+
+    // isPoll: the very first call (mount, or refreshKey changing because a
+    // trade was just logged) still shows the "Loading..." state as before.
+    // Interval-driven refreshes fetch quietly in the background instead -
+    // flipping loading back to true every 60s would blank out the whole
+    // dashboard the user is actively looking at just to redraw the same
+    // holdings with a new price.
+    function loadHoldings(isPoll) {
+      if (!isPoll) setLoading(true)
+      apiFetch("/holdings")
+        .then((response) => {
+          if (!response.ok) throw new Error("Failed to load holdings")
+          return response.json()
+        })
+        .then((result) => {
+          if (cancelled) return
+          setData(result)
+          hasDataRef.current = true
+          setLoading(false)
+        })
+        .catch((err) => {
+          if (cancelled) return
+          // A background poll failing (e.g. one flaky request) shouldn't
+          // blow away an already-loaded dashboard with an error screen -
+          // only surface the error if we don't have any data to show yet.
+          if (!isPoll || !hasDataRef.current) setError(err.message)
+          setLoading(false)
+        })
+    }
+
+    loadHoldings(false)
+    const intervalId = setInterval(() => loadHoldings(true), PRICE_POLL_INTERVAL_MS)
+
+    return () => {
+      cancelled = true
+      clearInterval(intervalId)
+    }
   }, [refreshKey])
 
   useEffect(() => {
