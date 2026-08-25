@@ -55,7 +55,11 @@ function SearchPage() {
       })
       if (res.ok || res.status === 409) {
         setWatchlistStatus("added")
-      } else {
+
+              if (res.ok || res.status === 409) {
+        setWatchlistStatus("added")
+        window.dispatchEvent(new Event("watchlist-updated"))
+      } else 
         setWatchlistStatus("error")
       }
     } catch {

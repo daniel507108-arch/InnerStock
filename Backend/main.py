@@ -143,6 +143,20 @@ def root():
     # FastAPI automatically converts this Python dictionary into JSON for us.
     return {"message": "InnerStock backend is running"}
 
+# How long a cached price is considered "fresh enough" before we re-hit
+# yfinance for it. This used to be 15 minutes, which - stacked with the
+# frontend only fetching /holdings on page load/mount - meant a price on
+# screen could visibly lag the real market by 15+ minutes even on a page
+# the user was actively looking at. Note this is a ceiling, not a
+# guarantee: yfinance's own free data is itself typically delayed
+# (commonly ~15-20 min behind the live tape), so dropping this further
+# tightens how often we re-check yfinance, but doesn't make the
+# underlying data source real-time. Paired with the frontend's polling
+# interval (see Dashboard.jsx / SidebarWatchlist.jsx) so a poll actually
+# has a chance of landing on a fresh fetch instead of just re-reading the
+# same stale cache row.
+PRICE_CACHE_TTL_SECONDS = 45
+
 # Shared logic: returns cached price data if fresh, otherwise fetches from
 # yfinance, saves it to the cache, and returns it. Used by both /stock/{ticker}
 # and /holdings, so a holding never shows $0 just because nobody visited
@@ -154,7 +168,7 @@ def get_or_fetch_price(ticker: str, db: Session):
 
     if cached and cached.last_updated:
         age = datetime.utcnow() - cached.last_updated
-        if age < timedelta(minutes=15):
+        if age < timedelta(seconds=PRICE_CACHE_TTL_SECONDS):
             return cached  # fresh enough, return as-is
 
     # No cache, or it's stale - fetch fresh data
