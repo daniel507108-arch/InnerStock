@@ -391,6 +391,14 @@ def get_trades(db: Session = Depends(get_db), current_user: User = Depends(get_c
 # Puts all trades into current holdings, calculates each position's
 # share of the total portfolio, and flags any position over 20%.
 # PROTECTED + SCOPED: only aggregates the logged-in user's own trades.
+# Share counts at or below this are treated as zero. Fractional shares are
+# stored and summed as floats, and floats can't represent most decimals
+# exactly - e.g. buying 0.1 + 0.2 shares then selling 0.3 leaves
+# 0.0000000000000000555 shares "held", which used to show up as a ghost
+# position with a nonsense avg_cost. Brokers only go to a handful of
+# decimal places, so anything this small is rounding noise, not real shares.
+SHARE_QTY_EPSILON = 1e-9
+
 @app.get("/holdings")
 def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     # Ordered chronologically - cost_tracking below needs trades in the order
@@ -450,6 +458,11 @@ def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get
                 avg_cost_before_sell = cost_tracking[ticker]["total_cost"] / held_qty
                 cost_tracking[ticker]["total_cost"] -= avg_cost_before_sell * qty
                 cost_tracking[ticker]["total_qty"] -= qty
+                # Fully exited (allowing for float rounding, see
+                # SHARE_QTY_EPSILON) - reset to a clean zero so leftover
+                # rounding noise can't leak into the cost of a later rebuy.
+                if cost_tracking[ticker]["total_qty"] <= SHARE_QTY_EPSILON:
+                    cost_tracking[ticker] = {"total_cost": 0, "total_qty": 0}
             # Sells reduce today's bucket first (see comment above) - capped
             # at whatever's actually in it, since a sell can also be selling
             # older shares that were never in today's bucket to begin with.
@@ -460,8 +473,9 @@ def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get
                 today_tracking[ticker]["total_cost"] -= avg_cost_today_before_sell * sell_from_today
                 today_tracking[ticker]["total_qty"] -= sell_from_today
 
-    # Step 2: drop any ticker fully sold out (0 or negative shares left)
-    holdings = {ticker: shares for ticker, shares in holdings.items() if shares > 0}
+    # Step 2: drop any ticker fully sold out (0 or negative shares left,
+    # allowing for float rounding - see SHARE_QTY_EPSILON)
+    holdings = {ticker: shares for ticker, shares in holdings.items() if shares > SHARE_QTY_EPSILON}
 
     # Step 3: look up current price for each holding, calculate dollar value
     holdings_list = []
