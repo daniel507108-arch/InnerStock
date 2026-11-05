@@ -90,6 +90,17 @@ function ChatScreen() {
         body: JSON.stringify({ message: trimmed }),
       })
 
+      // 429 = the backend's per-user AI rate limit. The backend rejects
+      // the message before saving it, so take the optimistic bubble back
+      // out and restore the text - otherwise the screen would show a
+      // message that isn't actually in the saved history.
+      if (response.status === 429) {
+        const body = await response.json().catch(() => null)
+        setMessages((prev) => prev.slice(0, -1))
+        setInput(trimmed)
+        throw new Error(body?.detail || "Too many messages - try again later")
+      }
+
       if (!response.ok) throw new Error("Couldn't reach the advisor")
 
       const data = await response.json()
