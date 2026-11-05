@@ -18,3 +18,5 @@ build/
 
 # Database files (each teammate keeps their own local copy)
 *.db
+# Test cache
+.pytest_cache/
