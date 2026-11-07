@@ -20,3 +20,4 @@ build/
 *.db
 # Test cache
 .pytest_cache/
+*.db.backup*
