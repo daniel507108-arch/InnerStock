@@ -13,9 +13,10 @@ router = APIRouter(prefix="/brokerage", tags=["brokerage"])
 
 
 def require_brokerage_access(current_user: User = Depends(get_current_user)) -> User:
-    # The SnapTrade key is a PERSONAL key - it reads one specific person's
-    # brokerage accounts. Only that person (SNAPTRADE_OWNER_EMAIL) may use
-    # it; everyone else gets a 403 rather than someone else's trades.
+    # Commercial (developer) keys: every user may link their own brokerage.
+    # Personal key: it reads one specific person's brokerage, so only that
+    # person (SNAPTRADE_OWNER_EMAIL) may use it - everyone else gets a 403
+    # rather than someone else's trades.
     if not snaptrade_sync.is_available_for(current_user):
         raise HTTPException(status_code=403, detail="Brokerage sync isn't set up for this account")
     return current_user
@@ -31,12 +32,14 @@ def get_status(db: Session = Depends(get_db), current_user: User = Depends(get_c
 
 
 # Returns a one-time SnapTrade Connection Portal link (valid 5 minutes) for
-# linking a new brokerage account or reconnecting an expired one.
+# linking a brokerage account or reconnecting an expired one. With
+# commercial keys, the user's first Connect registers their SnapTrade user.
 @router.post("/connect")
-def connect(current_user: User = Depends(require_brokerage_access)):
+def connect(db: Session = Depends(get_db), current_user: User = Depends(require_brokerage_access)):
     try:
-        return {"redirect_uri": snaptrade_sync.connection_portal_url(snaptrade_sync.get_client())}
+        return {"redirect_uri": snaptrade_sync.connection_portal_url(db, current_user)}
     except snaptrade_sync.BrokerageError as e:
+        db.rollback()
         raise HTTPException(status_code=502, detail=str(e))
 
 
@@ -50,6 +53,22 @@ def sync(force: bool = False, db: Session = Depends(get_db), current_user: User 
     except snaptrade_sync.BrokerageError as e:
         db.rollback()
         raise HTTPException(status_code=502, detail=str(e))
+
+
+# Unlinks the user's brokerage: SnapTrade deletes their user and every
+# connection/data it holds for them. Trades already in InnerStock stay.
+# Personal keys can't be disconnected from here - that's done in the
+# SnapTrade dashboard by the key's owner.
+@router.delete("/connection")
+def disconnect(db: Session = Depends(get_db), current_user: User = Depends(require_brokerage_access)):
+    if not snaptrade_sync.is_commercial():
+        raise HTTPException(status_code=400, detail="This connection is managed in the SnapTrade dashboard")
+    try:
+        snaptrade_sync.disconnect(db, current_user)
+    except snaptrade_sync.BrokerageError as e:
+        db.rollback()
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"available": True, **snaptrade_sync.status(db, current_user)}
 
 
 class AccountUpdate(BaseModel):

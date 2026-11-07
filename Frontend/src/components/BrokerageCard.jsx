@@ -24,11 +24,13 @@ function describeSync(result) {
   return { text: `${imported} trade${imported === 1 ? "" : "s"} synced from your brokerage.`, isError: false }
 }
 
-// Linked-brokerage strip on the dashboard: shows which Wealthsimple accounts
+// Linked-brokerage strip on the dashboard: shows which brokerage accounts
 // are syncing and when they last synced, keeps them synced in the
-// background, and offers "Sync now" + "Connect account". Renders nothing
-// for users who don't have brokerage sync set up (GET /brokerage/status
-// says available: false), so it's invisible to everyone else.
+// background, and offers "Sync now", "Connect account" and (with developer
+// SnapTrade keys, where each user has their own link) "Disconnect".
+// Renders nothing when brokerage sync isn't available to this user (GET
+// /brokerage/status says available: false) - e.g. with a personal key,
+// everyone except its owner.
 //
 // onSynced is called whenever a sync actually brought in or updated trades,
 // so the dashboard can reload holdings.
@@ -104,29 +106,61 @@ function BrokerageCard({ onSynced }) {
     }
   }
 
+  async function handleDisconnect() {
+    const ok = window.confirm(
+      "Disconnect your brokerage? SnapTrade will delete its connection and data for you. " +
+      "Trades already in InnerStock (and your theses) are kept."
+    )
+    if (!ok) return
+    try {
+      const response = await apiFetch("/brokerage/connection", { method: "DELETE" })
+      const result = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(result?.detail || "Could not disconnect")
+      setStatus(result)
+      setMessage({ text: "Brokerage disconnected. Your trades are still here.", isError: false })
+    } catch (err) {
+      setMessage({ text: err.message, isError: true })
+    }
+  }
+
   if (!status?.available) return null
 
-  const syncedAccounts = (status.accounts_detail || []).filter((a) => a.sync_enabled)
-  const accountLabel = syncedAccounts.length
-    ? syncedAccounts.map((a) => a.account_type?.toUpperCase()).join(" · ")
-    : "No accounts linked yet"
+  const accounts = status.accounts_detail || []
+  const syncedAccounts = accounts.filter((a) => a.sync_enabled)
+  // With developer keys a user may link any brokerage SnapTrade supports,
+  // so the name comes from the linked accounts rather than being fixed.
+  const brokerName = accounts[0]?.institution || "Brokerage"
+
+  let accountLabel = "Not linked"
+  if (status.connected) {
+    accountLabel = syncedAccounts.length
+      ? syncedAccounts.map((a) => a.account_type?.toUpperCase()).join(" · ")
+      : "No accounts syncing"
+  }
+
+  let meta = "Link your Wealthsimple to sync trades automatically"
+  if (syncing) meta = "Syncing…"
+  else if (status.connected) meta = `Synced ${timeAgo(status.last_synced_at)}`
 
   return (
     <div className="brokerage-card">
       <div className="brokerage-info">
-        <span className="brokerage-name">Wealthsimple</span>
+        <span className="brokerage-name">{brokerName}</span>
         <span className="pill pill-muted">{accountLabel}</span>
-        <span className="brokerage-meta">
-          {syncing ? "Syncing…" : `Synced ${timeAgo(status.last_synced_at)}`}
-        </span>
+        <span className="brokerage-meta">{meta}</span>
       </div>
       <div className="brokerage-actions">
         <button className="btn" onClick={() => runSync(true)} disabled={syncing}>
           Sync now
         </button>
-        <button className="btn" onClick={handleConnect}>
+        <button className={status.connected ? "btn" : "btn btn-accent"} onClick={handleConnect}>
           {status.connected ? "Reconnect" : "Connect account"}
         </button>
+        {status.can_disconnect && (
+          <button className="btn" onClick={handleDisconnect}>
+            Disconnect
+          </button>
+        )}
       </div>
       {message && (
         <div className={`brokerage-message${message.isError ? " error" : ""}`}>{message.text}</div>

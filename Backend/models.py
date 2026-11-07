@@ -144,6 +144,28 @@ class BrokerageAccount(Base):
     # snaptrade_sync.SYNCED_ACCOUNT_TYPES).
     sync_enabled = Column(Boolean, nullable=False, server_default=false())
     last_synced_at = Column(DateTime, nullable=True)
+    # Set when SnapTrade stops reporting this account (the user disconnected
+    # or reconnected their brokerage, which gives accounts new ids). Trades
+    # synced from it can then be taken over by the same account's new id
+    # instead of being imported twice - see snaptrade_sync._find_match.
+    disconnected_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (UniqueConstraint("user_id", "external_account_id", name="uq_brokerage_accounts_user_account"),)
+
+
+class SnapTradeUser(Base):
+    __tablename__ = "snaptrade_users"
+
+    # With commercial (developer) SnapTrade keys, every InnerStock user gets
+    # their own SnapTrade user, created the first time they press "Connect".
+    # Not used with a personal key (that key IS one person's SnapTrade user).
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    # The id we registered with SnapTrade - random, never the email (SnapTrade
+    # requires it to be immutable, and emails can change).
+    snaptrade_user_id = Column(String, unique=True, nullable=False)
+    # SnapTrade's per-user secret, encrypted with FIELD_ENCRYPTION_KEY
+    # (secret_box.py) - never stored in plain text.
+    user_secret_encrypted = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())

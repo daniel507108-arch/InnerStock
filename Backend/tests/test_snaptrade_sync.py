@@ -38,29 +38,59 @@ def order(id, symbol, action, qty, price, when, quote_currency="CAD", security_c
 
 
 class FakeSnapTrade:
+    """Stand-in for the SnapTrade SDK client.
+
+    Data is keyed by SnapTrade user id: None = the personal-key user (no
+    per-user credentials are sent); a string = a registered commercial-mode
+    user. Every call records the credentials it was made with, so tests can
+    prove each request carried the right user's id + secret.
+    """
+
     def __init__(self):
+        self.accounts = {None: ACCOUNTS}  # snaptrade user id -> account list
         self.activities = {}   # account id -> list of activity dicts
         self.orders = {}       # account id -> list of order dicts
         self.calls = 0
+        self.credentials_seen = []   # (method, user_id, user_secret)
+        self.registered = {}         # snaptrade user id -> secret
+        self.deleted = []
         outer = self
 
-        class AccountInformation:
-            def list_all_user_accounts(self):
-                outer.calls += 1
-                return {"results": ACCOUNTS}
+        def record(method, kwargs):
+            outer.calls += 1
+            outer.credentials_seen.append((method, kwargs.get("user_id"), kwargs.get("user_secret")))
+            user_id = kwargs.get("user_id")
+            if user_id is not None and outer.registered.get(user_id) != kwargs.get("user_secret"):
+                raise RuntimeError("401 invalid user secret")
+            return user_id
 
-            def get_account_activities(self, account_id, type, offset, limit, start_date=None):
-                outer.calls += 1
+        class AccountInformation:
+            def list_all_user_accounts(self, **kwargs):
+                user_id = record("list_all_user_accounts", kwargs)
+                return {"results": outer.accounts.get(user_id, [])}
+
+            def get_account_activities(self, account_id, type, offset, limit, start_date=None, **kwargs):
+                record("get_account_activities", kwargs)
                 data = outer.activities.get(account_id, [])
                 return {"data": data[offset:offset + limit], "pagination": {"total": len(data)}}
 
-            def get_user_account_recent_orders(self, account_id, only_executed):
-                outer.calls += 1
+            def get_user_account_recent_orders(self, account_id, only_executed, **kwargs):
+                record("get_user_account_recent_orders", kwargs)
                 return {"orders": outer.orders.get(account_id, [])}
 
         class Authentication:
-            def login_snap_trade_user(self, connection_type):
+            def login_snap_trade_user(self, connection_type, **kwargs):
+                record("login_snap_trade_user", kwargs)
                 return {"redirectURI": "https://app.snaptrade.example/portal?session=abc", "sessionId": "abc"}
+
+            def register_snap_trade_user(self, user_id):
+                outer.registered[user_id] = f"secret-for-{user_id}"
+                return {"userId": user_id, "userSecret": outer.registered[user_id]}
+
+            def delete_snap_trade_user(self, user_id):
+                outer.deleted.append(user_id)
+                outer.registered.pop(user_id, None)
+                return {"status": "deleted"}
 
         self.account_information = AccountInformation()
         self.authentication = Authentication()
