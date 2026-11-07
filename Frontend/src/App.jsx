@@ -3,7 +3,6 @@ import Layout from './components/Layout'
 import AuthScreen from './components/AuthScreen'
 import SurveyScreen from './components/SurveyScreen'
 import TradeForm from './components/TradeForm'
-import CsvUpload from './components/CsvUpload'
 import Dashboard from './components/Dashboard'
 import ThesisReview from './components/ThesisReview'
 import ChatScreen from './components/ChatScreen'
@@ -112,7 +111,6 @@ function App() {
     </div>
     <div className="content">
       <TradeForm onTradeLogged={handleTradeLogged} />
-      <CsvUpload onTradeLogged={handleTradeLogged} />
     </div>
   </>
 )}

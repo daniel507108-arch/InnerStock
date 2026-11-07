@@ -24,11 +24,6 @@ from dotenv import load_dotenv
 import os
 import anthropic
 
-#FILE UPLOADING
-from fastapi import UploadFile, File
-import csv
-import io
-import re
 
 # AUTH: registers a proper "bearer token" security scheme with FastAPI, so
 # Swagger UI's Authorize button recognizes it and can attach the token
@@ -53,8 +48,6 @@ from typing import List, Optional
 # Create the actual app instance. Everything below attaches to this "app" object.
 app = FastAPI()
 
-bearer_scheme = HTTPBearer()
-
 # CORS setup: by default, browsers block a webpage on one address (localhost:5173)
 # from fetching data from a different address (localhost:8000) unless the second
 # one explicitly allows it. This block gives that permission.
@@ -65,33 +58,13 @@ app.add_middleware(
     allow_headers=["*"],                       # allow all header types
 )
 
-# This function creates a fresh database connection for each request,
-# and closes it automatically when the request finishes - prevents
-# connections from piling up unused.
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# get_db / get_current_user live in deps.py so other route modules (e.g.
+# brokerage.py) can share them without importing main.
+from deps import bearer_scheme, get_db, get_current_user
 
-# AUTH: Dependency for protected endpoints - decodes the token via FastAPI's
-# HTTPBearer security scheme, looks up the matching user, and returns it.
-# Raises 401 if the token is missing, invalid, or the user no longer exists.
-# Defined here, right after get_db(), because Python needs this function to
-# already exist before any endpoint below uses it as Depends(get_current_user).
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme), db: Session = Depends(get_db)):
-    token = credentials.credentials  # HTTPBearer already strips the "Bearer " prefix for us
-
-    user_id = decode_access_token(token)
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
-
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
-
-    return user
+# Linked-brokerage (SnapTrade / Wealthsimple) routes: /brokerage/*
+from brokerage import router as brokerage_router
+app.include_router(brokerage_router)
 
 # This defines exactly what fields a new trade submission must contain, taken from Pydantic
 # If someone sends data missing a required field or with the wrong type,
@@ -391,6 +364,14 @@ def get_trades(db: Session = Depends(get_db), current_user: User = Depends(get_c
 # Puts all trades into current holdings, calculates each position's
 # share of the total portfolio, and flags any position over 20%.
 # PROTECTED + SCOPED: only aggregates the logged-in user's own trades.
+# Share counts at or below this are treated as zero. Fractional shares are
+# stored and summed as floats, and floats can't represent most decimals
+# exactly - e.g. buying 0.1 + 0.2 shares then selling 0.3 leaves
+# 0.0000000000000000555 shares "held", which used to show up as a ghost
+# position with a nonsense avg_cost. Brokers only go to a handful of
+# decimal places, so anything this small is rounding noise, not real shares.
+SHARE_QTY_EPSILON = 1e-9
+
 @app.get("/holdings")
 def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     # Ordered chronologically - cost_tracking below needs trades in the order
@@ -450,6 +431,11 @@ def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get
                 avg_cost_before_sell = cost_tracking[ticker]["total_cost"] / held_qty
                 cost_tracking[ticker]["total_cost"] -= avg_cost_before_sell * qty
                 cost_tracking[ticker]["total_qty"] -= qty
+                # Fully exited (allowing for float rounding, see
+                # SHARE_QTY_EPSILON) - reset to a clean zero so leftover
+                # rounding noise can't leak into the cost of a later rebuy.
+                if cost_tracking[ticker]["total_qty"] <= SHARE_QTY_EPSILON:
+                    cost_tracking[ticker] = {"total_cost": 0, "total_qty": 0}
             # Sells reduce today's bucket first (see comment above) - capped
             # at whatever's actually in it, since a sell can also be selling
             # older shares that were never in today's bucket to begin with.
@@ -460,8 +446,9 @@ def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get
                 today_tracking[ticker]["total_cost"] -= avg_cost_today_before_sell * sell_from_today
                 today_tracking[ticker]["total_qty"] -= sell_from_today
 
-    # Step 2: drop any ticker fully sold out (0 or negative shares left)
-    holdings = {ticker: shares for ticker, shares in holdings.items() if shares > 0}
+    # Step 2: drop any ticker fully sold out (0 or negative shares left,
+    # allowing for float rounding - see SHARE_QTY_EPSILON)
+    holdings = {ticker: shares for ticker, shares in holdings.items() if shares > SHARE_QTY_EPSILON}
 
     # Step 3: look up current price for each holding, calculate dollar value
     holdings_list = []
@@ -1290,123 +1277,9 @@ def get_chat_history(db: Session = Depends(get_db), current_user: User = Depends
     )
     return {"messages": [{"role": m.role, "content": m.content} for m in messages]}
 
-# Accepts a Wealthsimple "Activities" export CSV directly, in Wealthsimple's
-# own column format (effective_at, activity_type, activity_sub_type, symbol,
-# quantity, unit_price, etc.). Only rows where activity_type == "Trade" are imported; deposits,
-# withdrawals, and other MoneyMovement rows are skipped entirely. Imported
-# trades have no thesis_text/conviction_score/review_date, since Wealthsimple
-# has no concept of any of those - they're left null until the user fills
-# them in manually later.
-@app.post("/trades/import/wealthsimple")
-async def import_trades_wealthsimple(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    contents = await file.read()
-    decoded = contents.decode("utf-8")
-    reader = csv.DictReader(io.StringIO(decoded))
-
-    successful_count = 0
-    skipped_count = 0
-    errors = []
-
-    for row_num, row in enumerate(reader, start=1):
-        activity_type = (row.get("activity_type") or "").strip()
-
-        # Skip anything that isn't an actual buy/sell trade - deposits,
-        # e-Transfers, withdrawals, dividends, etc. all show up in this
-        # same export but aren't trades.
-        if activity_type != "Trade":
-            skipped_count += 1
-            continue
-
-        try:
-            sub_type = (row.get("activity_sub_type") or "").strip().upper()
-            if sub_type not in ("BUY", "SELL"):
-                raise ValueError(f"Unrecognized trade sub-type: {sub_type}")
-            action = sub_type.lower()
-
-            ticker = (row.get("symbol") or "").strip()
-            if not ticker:
-                raise ValueError("symbol must not be empty")
-
-            # Wealthsimple's CSV gives no exchange field, so a bare symbol like "GOOG"
-            # is ambiguous - could be the real Nasdaq stock or a CAD-hedged CDR sharing
-            # the same root symbol (priced completely differently, ~$54 vs ~$180).
-            # The description's "FX Rate: ..." marker is our only signal: its presence
-            # means a real US-priced security, its absence means CAD-native (TSX ETF
-            # or CDR) - so append ".TO" only when there's no FX Rate, and leave symbols
-            # Wealthsimple already suffixed (e.g. "HUT.TO") untouched.
-            description = row.get("description") or ""
-            if "." not in ticker and "FX Rate" not in description:
-                ticker = f"{ticker}.TO"
-
-            # Wealthsimple signs quantity negative for sells - take the
-            # absolute value, since action already carries buy/sell direction.
-            try:
-                quantity = abs(float(row.get("quantity")))
-            except (ValueError, TypeError):
-                raise ValueError("quantity must be a number")
-            if quantity <= 0:
-                raise ValueError("quantity must be greater than 0")
-
-            try:
-                price_per_share = float(row.get("unit_price"))
-            except (ValueError, TypeError):
-                raise ValueError("unit_price must be a number")
-            if price_per_share <= 0:
-                raise ValueError("unit_price must be greater than 0")
-
-            # Wealthsimple's unit_price for a real US stock is already
-            # CAD-converted (e.g. "FX Rate: 1.3926" in the description means
-            # the $134.03 unit_price is CAD, not USD). But get_or_fetch_price
-            # looks these bare tickers up on yfinance, which returns USD -
-            # so storing the CAD price here would compare CAD cost basis
-            # against USD current price later (a ~40% phantom loss). Divide
-            # back out by the trade's own FX rate so price_per_share ends up
-            # in the same currency (USD) that the live price will be in.
-            # CAD-native tickers (already suffixed ".TO" above) have no FX
-            # Rate and are left as-is, since both sides stay in CAD.
-            fx_match = re.search(r"FX Rate:\s*([\d.]+)", description)
-            if fx_match:
-                fx_rate = float(fx_match.group(1))
-                price_per_share = price_per_share / fx_rate
-
-            # effective_at is a full ISO timestamp with time and timezone,
-            # e.g. "2026-04-15T12:03:38-04:00" - only the date portion is
-            # needed, so split off everything from "T" onward.
-            effective_at_raw = (row.get("effective_at") or "").strip()
-            if not effective_at_raw:
-                raise ValueError("effective_at must not be empty")
-            try:
-                trade_date = date.fromisoformat(effective_at_raw.split("T")[0])
-            except ValueError:
-                raise ValueError(f"Could not parse date from: {effective_at_raw}")
-
-            new_trade = Trade(
-                user_id=current_user.id,
-                ticker=ticker.upper(),
-                action=action,
-                quantity=quantity,
-                price_per_share=price_per_share,
-                trade_date=trade_date,
-                thesis_text=None,
-                conviction_score=None,
-                review_date=None,
-            )
-            db.add(new_trade)
-            db.commit()
-            successful_count += 1
-
-        except ValueError as e:
-            db.rollback()
-            errors.append({"row": row_num, "message": str(e)})
-
-    return {
-        "successful_count": successful_count,
-        "skipped_count": skipped_count,
-        "errors": errors
-    }
-
-# Returns trades missing a thesis - the imported-but-unreviewed backlog
-# a user needs to work through after a bulk import, distinct from
+# Returns trades missing a thesis - the backlog of trades synced from a
+# linked brokerage (see snaptrade_sync.py) that a user still needs to write
+# a thesis for, distinct from
 # /thesis-reviews which only shows trades whose review_date has passed.
 @app.get("/trades/incomplete")
 def get_incomplete_trades(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
