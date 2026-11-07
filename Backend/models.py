@@ -1,5 +1,5 @@
-from sqlalchemy import Column, Integer, String, Numeric, Date, DateTime, ForeignKey, Text, Time, UniqueConstraint
-from sqlalchemy.sql import func
+from sqlalchemy import Boolean, Column, Integer, String, Numeric, Date, DateTime, ForeignKey, Text, Time, UniqueConstraint
+from sqlalchemy.sql import false, func
 from database import Base
 
 
@@ -62,6 +62,20 @@ class Trade(Base):
     review_notes = Column(Text, nullable=True)         # NEW — optional freeform reflection, added at grading time
     created_at = Column(DateTime, server_default=func.now())
 
+    # Where this trade came from: "manual" (logged through POST /trades),
+    # "csv" (the old Wealthsimple CSV import, since removed) or "snaptrade"
+    # (synced from a linked brokerage account - see snaptrade_sync.py).
+    source = Column(String, nullable=False, server_default="manual")
+    # The brokerage's own id for this trade (SnapTrade activity id). Unique
+    # per user, which is what makes re-running a sync safe: a trade that's
+    # already been imported is recognised and skipped, never duplicated.
+    # Null for manual/csv trades.
+    external_id = Column(String, nullable=True)
+    # Which linked account (TFSA, personal, ...) a synced trade happened in.
+    brokerage_account_id = Column(Integer, ForeignKey("brokerage_accounts.id"), nullable=True)
+
+    __table_args__ = (UniqueConstraint("user_id", "external_id", name="uq_trades_user_external_id"),)
+
 
 class PriceCache(Base):
     __tablename__ = "price_cache"
@@ -112,3 +126,46 @@ class Watchlist(Base):
     added_at = Column(DateTime, server_default=func.now())
 
     __table_args__ = (UniqueConstraint("user_id", "ticker", name="uq_watchlist_user_ticker"),)
+
+
+class BrokerageAccount(Base):
+    __tablename__ = "brokerage_accounts"
+
+    # One row per brokerage account linked through SnapTrade (e.g. a
+    # Wealthsimple TFSA). Created/updated by snaptrade_sync.sync_accounts.
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    external_account_id = Column(String, nullable=False)   # SnapTrade's account id
+    institution = Column(String, nullable=True)            # e.g. "Wealthsimple Trade"
+    name = Column(String, nullable=True)                   # e.g. "Wealthsimple Trade TFSA"
+    account_type = Column(String, nullable=True)           # e.g. "tfsa", "non_registered", "non_registered_crypto"
+    # Only accounts with this on have their trades pulled in. Defaults are
+    # set per account type when the account is first seen (see
+    # snaptrade_sync.SYNCED_ACCOUNT_TYPES).
+    sync_enabled = Column(Boolean, nullable=False, server_default=false())
+    last_synced_at = Column(DateTime, nullable=True)
+    # Set when SnapTrade stops reporting this account (the user disconnected
+    # or reconnected their brokerage, which gives accounts new ids). Trades
+    # synced from it can then be taken over by the same account's new id
+    # instead of being imported twice - see snaptrade_sync._find_match.
+    disconnected_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("user_id", "external_account_id", name="uq_brokerage_accounts_user_account"),)
+
+
+class SnapTradeUser(Base):
+    __tablename__ = "snaptrade_users"
+
+    # With commercial (developer) SnapTrade keys, every InnerStock user gets
+    # their own SnapTrade user, created the first time they press "Connect".
+    # Not used with a personal key (that key IS one person's SnapTrade user).
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), unique=True, nullable=False)
+    # The id we registered with SnapTrade - random, never the email (SnapTrade
+    # requires it to be immutable, and emails can change).
+    snaptrade_user_id = Column(String, unique=True, nullable=False)
+    # SnapTrade's per-user secret, encrypted with FIELD_ENCRYPTION_KEY
+    # (secret_box.py) - never stored in plain text.
+    user_secret_encrypted = Column(Text, nullable=False)
+    created_at = Column(DateTime, server_default=func.now())

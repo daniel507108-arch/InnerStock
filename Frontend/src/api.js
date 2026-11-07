@@ -1,4 +1,8 @@
-const API_BASE = "http://127.0.0.1:8000"
+// Backend address. Local dev talks to uvicorn on 127.0.0.1:8000; a deployed
+// build (e.g. on Vercel) sets VITE_API_URL to the hosted backend instead.
+// Vite bakes VITE_* variables in at build time, so changing it means
+// rebuilding/redeploying the frontend.
+const API_BASE = (import.meta.env.VITE_API_URL || "http://127.0.0.1:8000").replace(/\/$/, "")
 
 // Every component should call this instead of fetch() directly.
 // It automatically attaches the auth token, and centralizes the
