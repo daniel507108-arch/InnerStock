@@ -1,0 +1,11 @@
+# Never upload local secrets, local databases or the local virtualenv when
+# deploying with the Vercel CLI. Settings come from Vercel's environment
+# variables and data from the hosted Postgres instead.
+.env
+*.db
+*.db.backup*
+venv/
+__pycache__/
+.pytest_cache/
+tests/
+scripts/

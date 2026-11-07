@@ -51,9 +51,16 @@ app = FastAPI()
 # CORS setup: by default, browsers block a webpage on one address (localhost:5173)
 # from fetching data from a different address (localhost:8000) unless the second
 # one explicitly allows it. This block gives that permission.
+# Deployed frontends (e.g. the Vercel URL) are added through the
+# ALLOWED_ORIGINS env var as a comma-separated list - local dev works
+# without setting anything.
+ALLOWED_ORIGINS = ["http://localhost:5173", "http://localhost:5174"] + [
+    origin.strip().rstrip("/") for origin in os.getenv("ALLOWED_ORIGINS", "").split(",") if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174"],  # only allow requests from our React app's address
+    allow_origins=ALLOWED_ORIGINS,  # only allow requests from our React app's address(es)
     allow_methods=["*"],                       # allow all request types (GET, POST, etc.)
     allow_headers=["*"],                       # allow all header types
 )
