@@ -1,0 +1,5 @@
+# Keep local-only files out of Vercel CLI uploads
+.env.local
+.vercel/
+node_modules/
+dist/
