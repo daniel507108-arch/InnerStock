@@ -11,6 +11,11 @@ import os
 # so these win over anything in a developer's local .env.
 os.environ["JWT_SECRET_KEY"] = "test-secret-key"
 os.environ["ANTHROPIC_API_KEY"] = "test-key-not-real"
+# Blank (not unset) so a developer's real SnapTrade keys in .env can never
+# be loaded - load_dotenv() skips variables that already exist. Brokerage
+# tests opt in with fake values via the fake_snaptrade fixture.
+for _name in ("SNAPTRADE_CLIENT_ID", "SNAPTRADE_CONSUMER_KEY", "SNAPTRADE_OWNER_EMAIL"):
+    os.environ[_name] = ""
 
 from datetime import date, timedelta
 from types import SimpleNamespace

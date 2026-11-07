@@ -11,7 +11,7 @@ import pytest
 import main
 from auth import create_access_token
 from conftest import log_trade, signup
-from models import ChatMessage
+from models import ChatMessage, Trade
 
 PAST = date.today() - timedelta(days=5)
 
@@ -129,13 +129,14 @@ def test_thesis_reviews_are_scoped(client, alice, bob):
     assert client.get("/thesis-reviews", headers=bob).json()["reviews"] == []
 
 
-def test_incomplete_trades_are_scoped(client, alice, bob):
-    csv_data = (
-        "activity_type,activity_sub_type,symbol,quantity,unit_price,description,effective_at\n"
-        "Trade,BUY,AAPL,5,100,FX Rate: 1.0,2026-01-15T10:00:00-05:00\n"
-    )
-    client.post("/trades/import/wealthsimple", headers=alice,
-                files={"file": ("export.csv", csv_data, "text/csv")})
+def test_incomplete_trades_are_scoped(client, alice, bob, db_session_factory):
+    # A trade with no thesis yet (e.g. just synced from the brokerage).
+    alice_id = client.get("/auth/me", headers=alice).json()["id"]
+    db = db_session_factory()
+    db.add(Trade(user_id=alice_id, ticker="AAPL", action="buy", quantity=5, price_per_share=100,
+                 trade_date=PAST, source="snaptrade", external_id="activity:x"))
+    db.commit()
+    db.close()
 
     assert len(client.get("/trades/incomplete", headers=alice).json()["trades"]) == 1
     assert client.get("/trades/incomplete", headers=bob).json()["trades"] == []
