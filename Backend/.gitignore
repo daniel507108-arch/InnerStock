@@ -1,0 +1,3 @@
+# Vercel CLI link + its local token file
+.vercel/
+.env.local
