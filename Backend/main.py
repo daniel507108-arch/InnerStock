@@ -24,11 +24,6 @@ from dotenv import load_dotenv
 import os
 import anthropic
 
-#FILE UPLOADING
-from fastapi import UploadFile, File
-import csv
-import io
-import re
 
 # AUTH: registers a proper "bearer token" security scheme with FastAPI, so
 # Swagger UI's Authorize button recognizes it and can attach the token
@@ -50,48 +45,89 @@ CLAUDE_SONNET_4_6_OUTPUT_COST_PER_MTOK = 15.00
 from auth import hash_password, verify_password, create_access_token, decode_access_token
 from typing import List, Optional
 
+# For the AI rate limiter below. monotonic() is imported by name because
+# `time` is already taken by datetime's time class above.
+import threading
+from collections import defaultdict, deque
+from time import monotonic
+
 # Create the actual app instance. Everything below attaches to this "app" object.
 app = FastAPI()
-
-bearer_scheme = HTTPBearer()
 
 # CORS setup: by default, browsers block a webpage on one address (localhost:5173)
 # from fetching data from a different address (localhost:8000) unless the second
 # one explicitly allows it. This block gives that permission.
+# Deployed frontends (e.g. the Vercel URL) are added through the
+# ALLOWED_ORIGINS env var as a comma-separated list - local dev works
+# without setting anything.
+ALLOWED_ORIGINS = ["http://localhost:5173", "http://localhost:5174"] + [
+    origin.strip().rstrip("/") for origin in os.getenv("ALLOWED_ORIGINS", "").split(",") if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:5174"],  # only allow requests from our React app's address
+    allow_origins=ALLOWED_ORIGINS,  # only allow requests from our React app's address(es)
     allow_methods=["*"],                       # allow all request types (GET, POST, etc.)
     allow_headers=["*"],                       # allow all header types
 )
 
-# This function creates a fresh database connection for each request,
-# and closes it automatically when the request finishes - prevents
-# connections from piling up unused.
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+# get_db / get_current_user live in deps.py so other route modules (e.g.
+# brokerage.py) can share them without importing main.
+from deps import bearer_scheme, get_db, get_current_user
 
-# AUTH: Dependency for protected endpoints - decodes the token via FastAPI's
-# HTTPBearer security scheme, looks up the matching user, and returns it.
-# Raises 401 if the token is missing, invalid, or the user no longer exists.
-# Defined here, right after get_db(), because Python needs this function to
-# already exist before any endpoint below uses it as Depends(get_current_user).
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme), db: Session = Depends(get_db)):
-    token = credentials.credentials  # HTTPBearer already strips the "Bearer " prefix for us
+# Linked-brokerage (SnapTrade / Wealthsimple) routes: /brokerage/*
+from brokerage import router as brokerage_router
+app.include_router(brokerage_router)
 
-    user_id = decode_access_token(token)
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+# "Why did you make this trade?" inbox + reasons summary: /trades/needs-thesis,
+# /trades/thesis, /trades/reasons, /trades/reasons-summary
+import thesis
+app.include_router(thesis.router)
 
-    user = db.query(User).filter(User.id == user_id).first()
-    if not user:
-        raise HTTPException(status_code=401, detail="User not found")
+# AI RATE LIMITING: every endpoint that can trigger a real Claude call
+# (sentiment, bull/bear, advisor chat) costs money per hit, so each user
+# gets a capped number of Claude calls per rolling window. Without this, a
+# logged-in user (or a script using their token) could loop over tickers
+# or spam the chat and run up the API bill with no ceiling.
+#
+# Buckets are separate so heavy dashboard use (one sentiment lookup per
+# holding) can't lock someone out of the advisor chat, and vice versa.
+# Values are (max_calls, window_seconds) - tune here if real usage needs it.
+#
+# Kept in memory on purpose: no new dependency or DB table needed. The
+# trade-off is that counts reset when the server restarts and aren't shared
+# across multiple worker processes - fine for a single uvicorn process, but
+# this would need to move to Redis or the DB once there are several workers.
+AI_RATE_LIMITS = {
+    "analysis": (60, 3600),  # /sentiment + /bullbear, Claude calls only (cache hits are free)
+    "chat": (40, 3600),      # /chat messages
+}
+_ai_call_log = defaultdict(deque)  # (user_id, bucket) -> timestamps of recent calls
+_ai_call_lock = threading.Lock()   # sync routes run in a threadpool, so guard the shared dict
 
-    return user
+
+def enforce_ai_rate_limit(user_id: int, bucket: str):
+    max_calls, window_seconds = AI_RATE_LIMITS[bucket]
+    now = monotonic()
+
+    with _ai_call_lock:
+        calls = _ai_call_log[(user_id, bucket)]
+
+        # Drop timestamps that have aged out of the rolling window
+        while calls and now - calls[0] >= window_seconds:
+            calls.popleft()
+
+        if len(calls) >= max_calls:
+            # The oldest call in the window is the next one to expire, so
+            # that's how long until a slot frees up.
+            retry_after = int(window_seconds - (now - calls[0])) + 1
+            raise HTTPException(
+                status_code=429,
+                detail=f"AI request limit reached. Try again in about {max(1, retry_after // 60)} minute(s).",
+                headers={"Retry-After": str(retry_after)},
+            )
+
+        calls.append(now)
 
 # This defines exactly what fields a new trade submission must contain, taken from Pydantic
 # If someone sends data missing a required field or with the wrong type,
@@ -106,6 +142,10 @@ class TradeCreate(BaseModel):
     thesis_text: str
     conviction_score: int
     review_date: date
+    # Why the trade was made, from thesis.BUY_REASONS / SELL_REASONS.
+    # Optional at the API level so older clients keep working; the Log
+    # Trade form asks for at least one.
+    reason_tags: List[str] = []
 
 from pydantic import BaseModel, EmailStr
 
@@ -365,6 +405,7 @@ def get_price_at(ticker: str, trade_date: date, trade_time: str = None):
 # can create a trade under someone else's account.
 @app.post("/trades") # When front end sents POST request to /trades this will run
 def create_trade(trade: TradeCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)): #Uses function get_db to open a connection to database
+    reason_tags = thesis.validate_tags(trade.action, trade.reason_tags)
     new_trade = Trade( #CONSTRUCTOR
         user_id=current_user.id,  # taken from the logged-in user, not the client
         ticker=trade.ticker,
@@ -376,6 +417,8 @@ def create_trade(trade: TradeCreate, db: Session = Depends(get_db), current_user
         thesis_text=trade.thesis_text,
         conviction_score=trade.conviction_score,
         review_date=trade.review_date,
+        reason_tags=",".join(reason_tags) or None,
+        thesis_written_at=datetime.utcnow(),  # written at logging time, by definition
     )
     db.add(new_trade)      # stage the new trade for saving
     db.commit()             # actually save it to the database
@@ -391,6 +434,14 @@ def get_trades(db: Session = Depends(get_db), current_user: User = Depends(get_c
 # Puts all trades into current holdings, calculates each position's
 # share of the total portfolio, and flags any position over 20%.
 # PROTECTED + SCOPED: only aggregates the logged-in user's own trades.
+# Share counts at or below this are treated as zero. Fractional shares are
+# stored and summed as floats, and floats can't represent most decimals
+# exactly - e.g. buying 0.1 + 0.2 shares then selling 0.3 leaves
+# 0.0000000000000000555 shares "held", which used to show up as a ghost
+# position with a nonsense avg_cost. Brokers only go to a handful of
+# decimal places, so anything this small is rounding noise, not real shares.
+SHARE_QTY_EPSILON = 1e-9
+
 @app.get("/holdings")
 def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     # Ordered chronologically - cost_tracking below needs trades in the order
@@ -450,6 +501,11 @@ def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get
                 avg_cost_before_sell = cost_tracking[ticker]["total_cost"] / held_qty
                 cost_tracking[ticker]["total_cost"] -= avg_cost_before_sell * qty
                 cost_tracking[ticker]["total_qty"] -= qty
+                # Fully exited (allowing for float rounding, see
+                # SHARE_QTY_EPSILON) - reset to a clean zero so leftover
+                # rounding noise can't leak into the cost of a later rebuy.
+                if cost_tracking[ticker]["total_qty"] <= SHARE_QTY_EPSILON:
+                    cost_tracking[ticker] = {"total_cost": 0, "total_qty": 0}
             # Sells reduce today's bucket first (see comment above) - capped
             # at whatever's actually in it, since a sell can also be selling
             # older shares that were never in today's bucket to begin with.
@@ -460,8 +516,9 @@ def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get
                 today_tracking[ticker]["total_cost"] -= avg_cost_today_before_sell * sell_from_today
                 today_tracking[ticker]["total_qty"] -= sell_from_today
 
-    # Step 2: drop any ticker fully sold out (0 or negative shares left)
-    holdings = {ticker: shares for ticker, shares in holdings.items() if shares > 0}
+    # Step 2: drop any ticker fully sold out (0 or negative shares left,
+    # allowing for float rounding - see SHARE_QTY_EPSILON)
+    holdings = {ticker: shares for ticker, shares in holdings.items() if shares > SHARE_QTY_EPSILON}
 
     # Step 3: look up current price for each holding, calculate dollar value
     holdings_list = []
@@ -594,10 +651,17 @@ def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get
 
 # Uses Claude to generate a bull case, bear case, and key risk for a given
 # ticker, based on data we already have cached (no new yfinance call needed).
-# NOT user-scoped - stock-level analysis, not tied to a specific portfolio.
+# The analysis itself is stock-level (not tied to a specific portfolio), but
+# the route is PROTECTED: every hit is a paid Claude call, so it requires
+# login and counts against the user's "analysis" rate limit.
 @app.get("/bullbear/{ticker}")
-def get_bull_bear(ticker: str, db: Session = Depends(get_db)):
+def get_bull_bear(ticker: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ticker = ticker.upper()
+
+    # Checked before the price lookup too, so a rate-limited user doesn't
+    # trigger yfinance calls either. No cache on this route, so every
+    # request is a Claude call and always counts.
+    enforce_ai_rate_limit(current_user.id, "analysis")
 
     # Reuse the same helper /holdings uses - checks the cache first, and
     # automatically fetches fresh data from yfinance if it's missing or stale,
@@ -719,8 +783,10 @@ def update_trade_outcome(trade_id: int, update: OutcomeUpdate, db: Session = Dep
 # single overall sentiment classification, and returns exactly one of:
 # "positive", "neutral", "negative".
 # NOT user-scoped - stock-level sentiment, not tied to a specific portfolio.
-@app.get("/sentiment/{ticker}") 
-def get_sentiment(ticker: str, db: Session = Depends(get_db)):
+# PROTECTED: a cache miss here means a paid Claude call, so the route
+# requires login and cache misses count against the "analysis" rate limit.
+@app.get("/sentiment/{ticker}")
+def get_sentiment(ticker: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ticker = ticker.upper()  # normalize, same habit as our other stock routes
 
     # Sentiment costs a real Claude API call to generate, unlike a price
@@ -737,6 +803,11 @@ def get_sentiment(ticker: str, db: Session = Depends(get_db)):
         if cached.sentiment == "unavailable":
             raise HTTPException(status_code=404, detail=f"No news available for ticker '{ticker}'")
         return {"ticker": ticker, "sentiment": cached.sentiment, "summary": cached.summary}
+
+    # Only cache misses reach this point, so fresh cache reads above never
+    # use up the user's limit - just the requests that lead to a new
+    # Claude call.
+    enforce_ai_rate_limit(current_user.id, "analysis")
 
     # Ask yfinance for recent news articles about this ticker.
     # stock.news is a DIFFERENT dataset than stock.info - this one returns
@@ -1116,11 +1187,17 @@ Stated fear/mistake: {profile.biggest_fear or "not provided"}
     ) or "No current holdings."
 
     trades_summary = "\n".join(
-    f"- {t.trade_date} {t.action.upper()} {t.ticker}: conviction {t.conviction_score}/5, "
-    f"thesis: \"{t.thesis_text}\", outcome: {t.outcome_tag or 'not yet reviewed'}"
+    f"- {t.trade_date} {t.action.upper()} {t.ticker}: conviction "
+    f"{f'{t.conviction_score}/5' if t.conviction_score else 'n/a'}, "
+    f"{thesis.describe_trade_reason(t)}, outcome: {t.outcome_tag or 'not yet reviewed'}"
     + (f", reflection: \"{t.review_notes}\"" if t.review_notes else "")
     for t in recent_trades
 ) or "No trades logged yet."
+
+    # Why the user trades, in their own words/categories - updated every
+    # time they answer the thesis inbox, so the advisor's picture of their
+    # habits stays current (see thesis.advisor_context_section).
+    reasons_summary = thesis.advisor_context_section(db, current_user)
 
     patterns_summary = f"""
 Reviewed trades: {patterns_data['reviewed_count']}, pending review: {patterns_data['pending_count']}
@@ -1185,6 +1262,8 @@ Response formatting:
 
 When relevant, help the user recognize patterns in their own investing behavior—such as concentration risk, FOMO, or conviction consistency—using their actual data.
 
+The user's stated reasons for their trades (below) are the best evidence of how they actually invest. Compare what they say they do with what they do: e.g. which reasons tend to work for them, whether they often can't remember why they traded, or whether their stated style (profile) matches their real reasons. Treat reasons written in hindsight as less reliable.
+
 Do not give generic investing advice. Ground your answers in the real data below whenever relevant. You are not a licensed financial advisor; make that clear if the user asks for concrete buy/sell recommendations.
 
 === USER PROFILE ===
@@ -1203,6 +1282,9 @@ Average conviction across positions: {holdings_data['avg_conviction']}/5
 
 === BEHAVIORAL PATTERNS ===
 {patterns_summary}
+
+=== WHY THIS USER TRADES (their own stated reasons) ===
+{reasons_summary}
 """
 
 # The advisor chat. Saves the user's message, rebuilds full context fresh,
@@ -1211,6 +1293,10 @@ Average conviction across positions: {holdings_data['avg_conviction']}/5
 # own data and conversation.
 @app.post("/chat")
 def chat(payload: ChatMessageIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    # Checked before saving anything, so a rate-limited message isn't
+    # stored in history without a reply to go with it.
+    enforce_ai_rate_limit(current_user.id, "chat")
+
     # Save the user's new message first - stored immediately, before we
     # even talk to Claude, so it's never lost even if something below fails.
     user_message = ChatMessage(user_id=current_user.id, role="user", content=payload.message)
@@ -1290,129 +1376,17 @@ def get_chat_history(db: Session = Depends(get_db), current_user: User = Depends
     )
     return {"messages": [{"role": m.role, "content": m.content} for m in messages]}
 
-# Accepts a Wealthsimple "Activities" export CSV directly, in Wealthsimple's
-# own column format (effective_at, activity_type, activity_sub_type, symbol,
-# quantity, unit_price, etc.). Only rows where activity_type == "Trade" are imported; deposits,
-# withdrawals, and other MoneyMovement rows are skipped entirely. Imported
-# trades have no thesis_text/conviction_score/review_date, since Wealthsimple
-# has no concept of any of those - they're left null until the user fills
-# them in manually later.
-@app.post("/trades/import/wealthsimple")
-async def import_trades_wealthsimple(file: UploadFile = File(...), db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    contents = await file.read()
-    decoded = contents.decode("utf-8")
-    reader = csv.DictReader(io.StringIO(decoded))
-
-    successful_count = 0
-    skipped_count = 0
-    errors = []
-
-    for row_num, row in enumerate(reader, start=1):
-        activity_type = (row.get("activity_type") or "").strip()
-
-        # Skip anything that isn't an actual buy/sell trade - deposits,
-        # e-Transfers, withdrawals, dividends, etc. all show up in this
-        # same export but aren't trades.
-        if activity_type != "Trade":
-            skipped_count += 1
-            continue
-
-        try:
-            sub_type = (row.get("activity_sub_type") or "").strip().upper()
-            if sub_type not in ("BUY", "SELL"):
-                raise ValueError(f"Unrecognized trade sub-type: {sub_type}")
-            action = sub_type.lower()
-
-            ticker = (row.get("symbol") or "").strip()
-            if not ticker:
-                raise ValueError("symbol must not be empty")
-
-            # Wealthsimple's CSV gives no exchange field, so a bare symbol like "GOOG"
-            # is ambiguous - could be the real Nasdaq stock or a CAD-hedged CDR sharing
-            # the same root symbol (priced completely differently, ~$54 vs ~$180).
-            # The description's "FX Rate: ..." marker is our only signal: its presence
-            # means a real US-priced security, its absence means CAD-native (TSX ETF
-            # or CDR) - so append ".TO" only when there's no FX Rate, and leave symbols
-            # Wealthsimple already suffixed (e.g. "HUT.TO") untouched.
-            description = row.get("description") or ""
-            if "." not in ticker and "FX Rate" not in description:
-                ticker = f"{ticker}.TO"
-
-            # Wealthsimple signs quantity negative for sells - take the
-            # absolute value, since action already carries buy/sell direction.
-            try:
-                quantity = abs(float(row.get("quantity")))
-            except (ValueError, TypeError):
-                raise ValueError("quantity must be a number")
-            if quantity <= 0:
-                raise ValueError("quantity must be greater than 0")
-
-            try:
-                price_per_share = float(row.get("unit_price"))
-            except (ValueError, TypeError):
-                raise ValueError("unit_price must be a number")
-            if price_per_share <= 0:
-                raise ValueError("unit_price must be greater than 0")
-
-            # Wealthsimple's unit_price for a real US stock is already
-            # CAD-converted (e.g. "FX Rate: 1.3926" in the description means
-            # the $134.03 unit_price is CAD, not USD). But get_or_fetch_price
-            # looks these bare tickers up on yfinance, which returns USD -
-            # so storing the CAD price here would compare CAD cost basis
-            # against USD current price later (a ~40% phantom loss). Divide
-            # back out by the trade's own FX rate so price_per_share ends up
-            # in the same currency (USD) that the live price will be in.
-            # CAD-native tickers (already suffixed ".TO" above) have no FX
-            # Rate and are left as-is, since both sides stay in CAD.
-            fx_match = re.search(r"FX Rate:\s*([\d.]+)", description)
-            if fx_match:
-                fx_rate = float(fx_match.group(1))
-                price_per_share = price_per_share / fx_rate
-
-            # effective_at is a full ISO timestamp with time and timezone,
-            # e.g. "2026-04-15T12:03:38-04:00" - only the date portion is
-            # needed, so split off everything from "T" onward.
-            effective_at_raw = (row.get("effective_at") or "").strip()
-            if not effective_at_raw:
-                raise ValueError("effective_at must not be empty")
-            try:
-                trade_date = date.fromisoformat(effective_at_raw.split("T")[0])
-            except ValueError:
-                raise ValueError(f"Could not parse date from: {effective_at_raw}")
-
-            new_trade = Trade(
-                user_id=current_user.id,
-                ticker=ticker.upper(),
-                action=action,
-                quantity=quantity,
-                price_per_share=price_per_share,
-                trade_date=trade_date,
-                thesis_text=None,
-                conviction_score=None,
-                review_date=None,
-            )
-            db.add(new_trade)
-            db.commit()
-            successful_count += 1
-
-        except ValueError as e:
-            db.rollback()
-            errors.append({"row": row_num, "message": str(e)})
-
-    return {
-        "successful_count": successful_count,
-        "skipped_count": skipped_count,
-        "errors": errors
-    }
-
-# Returns trades missing a thesis - the imported-but-unreviewed backlog
-# a user needs to work through after a bulk import, distinct from
+# Returns trades missing a thesis - the backlog of trades synced from a
+# linked brokerage (see snaptrade_sync.py) that a user still needs to write
+# a thesis for, distinct from
 # /thesis-reviews which only shows trades whose review_date has passed.
 @app.get("/trades/incomplete")
 def get_incomplete_trades(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    # Same definition as the thesis inbox: no thesis AND no reason given
+    # (a "don't remember" answer has reasons but no thesis text).
     trades = (
         db.query(Trade)
-        .filter(Trade.user_id == current_user.id, Trade.thesis_text.is_(None))
+        .filter(*thesis.needs_reason_filter(current_user))
         .order_by(Trade.trade_date.desc())
         .all()
     )

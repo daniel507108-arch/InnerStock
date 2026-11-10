@@ -43,6 +43,12 @@ function BullBearPanel({ ticker, forceExpanded }) {
     setError(null)
     try {
       const response = await apiFetch(`/bullbear/${ticker}`)
+      // 429 = the backend's per-user AI rate limit - surface its message
+      // (which says how long to wait) instead of the generic fallback.
+      if (response.status === 429) {
+        const body = await response.json().catch(() => null)
+        throw new Error(body?.detail || "Too many AI requests - try again later")
+      }
       if (!response.ok) throw new Error("Analysis not available yet")
       const result = await response.json()
       setData(result)

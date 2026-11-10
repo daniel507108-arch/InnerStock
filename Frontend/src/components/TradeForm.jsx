@@ -1,5 +1,6 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { apiFetch } from "../api"
+import ReasonChips from "./ReasonChips"
 
 // All the state, validation, and submit logic below is UNCHANGED from the
 // current version — same fields, same validate() rules, same handleSubmit
@@ -18,7 +19,17 @@ function TradeForm({ onTradeLogged }) {
     thesis_text: "",
     conviction_score: 3,
     review_date: "",
+    reason_tags: [], // NEW - why, as categories (see ReasonChips / thesis.py)
   })
+
+  // NEW - the reason catalog ({buy: [...], sell: [...]}) from the backend.
+  const [reasonOptions, setReasonOptions] = useState(null)
+  useEffect(() => {
+    apiFetch("/trades/reasons")
+      .then((response) => (response.ok ? response.json() : null))
+      .then(setReasonOptions)
+      .catch(() => setReasonOptions(null))
+  }, [])
 
   const [status, setStatus] = useState(null)
   const [errorMessage, setErrorMessage] = useState("")
@@ -51,7 +62,8 @@ function TradeForm({ onTradeLogged }) {
   // "buy" or "sell" into form.action), just triggered by clicking one of
   // the two toggle buttons instead of picking from a dropdown.
   function handleActionClick(action) {
-    setForm((prev) => ({ ...prev, action }))
+    // Buy and sell reasons are different lists, so switching side clears them.
+    setForm((prev) => ({ ...prev, action, reason_tags: prev.action === action ? prev.reason_tags : [] }))
   }
 
   function handleConvictionClick(score) {
@@ -64,6 +76,7 @@ function TradeForm({ onTradeLogged }) {
     if (!form.price_per_share || Number(form.price_per_share) <= 0) return "Price must be greater than 0."
     if (!form.trade_date) return "Trade date is required."
     if (!form.trade_time) return "Trade time is required."
+    if (reasonOptions && form.reason_tags.length === 0) return "Pick at least one reason for this trade."
     if (!form.thesis_text.trim()) return "You must write a thesis before logging this trade."
     if (form.conviction_score < 1 || form.conviction_score > 5) return "Conviction score must be between 1 and 5."
     if (!form.review_date) return "Review date is required."
@@ -96,7 +109,7 @@ function TradeForm({ onTradeLogged }) {
       setErrorMessage("")
       setForm({
         ticker: "", action: "buy", quantity: "", price_per_share: "",
-        trade_date: "", trade_time: "", thesis_text: "", conviction_score: 3, review_date: "",
+        trade_date: "", trade_time: "", thesis_text: "", conviction_score: 3, review_date: "", reason_tags: [],
       })
       setPriceNote("")
       setPriceAutofilled(false)
@@ -258,6 +271,19 @@ function TradeForm({ onTradeLogged }) {
 
         <div className="trade-card reasoning-card">
           <div className="reasoning-prompt">What's your reasoning?</div>
+
+          {reasonOptions && (
+            <div className="field">
+              <label>Reasons (pick all that apply)</label>
+              {/* No "Don't remember" here - you're logging the trade right now. */}
+              <ReasonChips
+                options={reasonOptions[form.action]}
+                selected={form.reason_tags}
+                onChange={(reason_tags) => setForm((prev) => ({ ...prev, reason_tags }))}
+                includeDontRemember={false}
+              />
+            </div>
+          )}
 
           <div className="field">
             <textarea name="thesis_text" value={form.thesis_text} onChange={handleChange} />

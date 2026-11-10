@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react"
 import StatsCards from "./StatsCards"
 import HoldingsTable from "./HoldingsTable"
+import BrokerageCard from "./BrokerageCard"
 import { apiFetch } from "../api"
 
 // How often the dashboard re-polls /holdings for updated prices while the
@@ -18,12 +19,15 @@ const PRICE_POLL_INTERVAL_MS = 60_000
 // step 5). Also new: the /holdings fetch now repeats on an interval instead
 // of firing once per mount, so prices stay current without the user having
 // to manually reload.
-function Dashboard({ refreshKey, onNavigate }) {
+function Dashboard({ refreshKey, onNavigate, inboxCount = 0, onBrokerageSynced }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
   const [accuracyPercent, setAccuracyPercent] = useState(null)
   const [gradedCount, setGradedCount] = useState(null)
+  // Bumped by BrokerageCard whenever a Wealthsimple sync brings in trades,
+  // so holdings reload with them.
+  const [syncKey, setSyncKey] = useState(0)
 
   // Mirrors `data` so the poll's error handler can check "do we already have
   // something on screen" without depending on `data` directly - depending on
@@ -65,14 +69,16 @@ function Dashboard({ refreshKey, onNavigate }) {
         })
     }
 
-    loadHoldings(false)
+    // Quiet reload if holdings are already on screen (e.g. a brokerage sync
+    // just finished) - no reason to blank the dashboard for that.
+    loadHoldings(hasDataRef.current)
     const intervalId = setInterval(() => loadHoldings(true), PRICE_POLL_INTERVAL_MS)
 
     return () => {
       cancelled = true
       clearInterval(intervalId)
     }
-  }, [refreshKey])
+  }, [refreshKey, syncKey])
 
   useEffect(() => {
   apiFetch("/trading-patterns")
@@ -98,10 +104,8 @@ function Dashboard({ refreshKey, onNavigate }) {
       setGradedCount(null)
     })
 }, [refreshKey])
-  // Topbar is identical across all three loading/error/empty/loaded states,
-  // so it's pulled out once here instead of repeated in every early return
-  // below — that's the main structural change from the old version, which
-  // returned a bare <p> with no shell at all while loading.
+  // Topbar is identical across all loading/error/empty/loaded states, so
+  // it's built once here and used by the single return at the bottom.
   const topbar = (
     <div className="topbar">
       <div>
@@ -114,60 +118,65 @@ function Dashboard({ refreshKey, onNavigate }) {
     </div>
   )
 
+  const dayChangeValue = data ? data.holdings.reduce((sum, h) => sum + h.day_gain_loss, 0) : 0
+  const overweightCount = data ? data.holdings.filter((h) => h.overweight_flag).length : 0
+
+  let body
   if (loading) {
-    return (
+    body = <p style={{ color: "var(--color-text-secondary)" }}>Loading your dashboard...</p>
+  } else if (error) {
+    body = <p style={{ color: "var(--color-danger)" }}>Failed to load dashboard: {error}</p>
+  } else if (!data || data.holdings.length === 0) {
+    body = (
+      <p style={{ color: "var(--color-text-secondary)" }}>
+        No holdings yet — log a trade or sync your brokerage to get started.
+      </p>
+    )
+  } else {
+    body = (
       <>
-        {topbar}
-        <div className="content">
-          <p style={{ color: "var(--color-text-secondary)" }}>Loading your dashboard...</p>
-        </div>
+        <StatsCards
+          totalValue={data.total_value}
+          dayChangePercent={data.day_change_percent}
+          dayChangeValue={dayChangeValue}
+          positionCount={data.position_count}
+          overweightCount={overweightCount}
+          avgConviction={data.avg_conviction}
+          accuracyPercent={accuracyPercent}
+          gradedCount={gradedCount}
+        />
+        <HoldingsTable holdings={data.holdings} />
       </>
     )
   }
 
-  if (error) {
-    return (
-      <>
-        {topbar}
-        <div className="content">
-          <p style={{ color: "var(--color-danger)" }}>Failed to load dashboard: {error}</p>
-        </div>
-      </>
-    )
-  }
-
-  if (!data || data.holdings.length === 0) {
-    return (
-      <>
-        {topbar}
-        <div className="content">
-          <p style={{ color: "var(--color-text-secondary)" }}>
-            No holdings yet — log a trade to get started.
-          </p>
-        </div>
-      </>
-    )
-  }
-
-  const dayChangeValue = data.holdings.reduce((sum, h) => sum + h.day_gain_loss, 0)
-  const overweightCount = data.holdings.filter((h) => h.overweight_flag).length
-
+  // The topbar and BrokerageCard are rendered the same way in every state
+  // (loading / error / empty / loaded) so the card stays mounted while
+  // holdings reload underneath it.
   return (
     <>
       {topbar}
       <div className="content">
-        
-        <StatsCards
-        totalValue={data.total_value}
-        dayChangePercent={data.day_change_percent}
-        dayChangeValue={dayChangeValue}
-        positionCount={data.position_count}
-        overweightCount={overweightCount}
-        avgConviction={data.avg_conviction}
-        accuracyPercent={accuracyPercent}
-        gradedCount={gradedCount}
-      />
-        <HoldingsTable holdings={data.holdings} />
+        <BrokerageCard
+          onSynced={() => {
+            setSyncKey((k) => k + 1)
+            onBrokerageSynced?.()
+          }}
+        />
+        {inboxCount > 0 && (
+          // Accountability nudge: synced trades don't count as journaled
+          // until the user has said why they made them.
+          <div className="inbox-banner">
+            <span>
+              <strong>{inboxCount} trade{inboxCount === 1 ? " is" : "s are"} missing a reason.</strong>{" "}
+              Your journal (and your advisor) only learn from trades you explain.
+            </span>
+            <button className="btn btn-accent" onClick={() => onNavigate?.("reasons")}>
+              Explain them
+            </button>
+          </div>
+        )}
+        {body}
       </div>
     </>
   )
