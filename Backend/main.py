@@ -84,6 +84,11 @@ app.include_router(brokerage_router)
 import thesis
 app.include_router(thesis.router)
 
+# Grading evidence for due reviews: /thesis-reviews/{id}/scorecard (price
+# move, S&P 500 comparison, suggested grade) and the grade-saving rules.
+import grading
+app.include_router(grading.router)
+
 # AI RATE LIMITING: every endpoint that can trigger a real Claude call
 # (sentiment, bull/bear, advisor chat) costs money per hit, so each user
 # gets a capped number of Claude calls per rolling window. Without this, a
@@ -707,25 +712,36 @@ def get_thesis_reviews(db: Session = Depends(get_db), current_user: User = Depen
         Trade.user_id == current_user.id,
         Trade.review_date <= today,
         Trade.outcome_tag.is_(None)
-    ).all()
+    ).order_by(Trade.review_date, Trade.id).all()
 
-    reviews = []
-    for trade in due_trades:
-        fomo_result = check_fomo_for_trade(trade)  # NEW
+    # No price lookups here any more: the FOMO check and the price/S&P 500
+    # numbers moved to GET /thesis-reviews/{id}/scorecard (grading.py),
+    # which each card loads on its own - so this list returns instantly
+    # instead of waiting on one yfinance download per due trade.
+    return {"reviews": [review_json(trade) for trade in due_trades]}
 
-        reviews.append({
-            "id": trade.id,
-            "ticker": trade.ticker,
-            "action": trade.action,
-            "thesis_text": trade.thesis_text,
-            "conviction_score": trade.conviction_score,
-            "trade_date": trade.trade_date.isoformat(),
-            "review_date": trade.review_date.isoformat(),
-            "fomo_flag": fomo_result["fomo_flag"],  # NEW
-            "fomo_reason": fomo_result["reason"]  # NEW
-        })
 
-    return {"reviews": reviews}
+def review_json(trade: Trade) -> dict:
+    """A trade as the review screen shows it: the thesis plus WHY it was made."""
+    return {
+        "id": trade.id,
+        "ticker": trade.ticker,
+        "action": trade.action,
+        "quantity": float(trade.quantity),
+        "price_per_share": float(trade.price_per_share),
+        "thesis_text": trade.thesis_text,
+        "conviction_score": trade.conviction_score,
+        "trade_date": trade.trade_date.isoformat(),
+        "review_date": trade.review_date.isoformat() if trade.review_date else None,
+        "reasons": [{"tag": t, "label": thesis.label_for(trade.action, t)} for t in thesis.parse_tags(trade)],
+        "written_in_hindsight": thesis.is_hindsight(trade),
+        "outcome_tag": trade.outcome_tag,
+        "review_notes": trade.review_notes,
+        "suggested_outcome": trade.suggested_outcome,
+        "graded_against_numbers": grading.contradicts(trade.suggested_outcome, trade.outcome_tag),
+        "graded_return_pct": trade.graded_return_pct,
+        "graded_benchmark_return_pct": trade.graded_benchmark_return_pct,
+    }
 
 # Returns trades that HAVE been graded (outcome_tag is set), most recent
 # first, for the "Recently reviewed" section — the counterpart to
@@ -736,29 +752,18 @@ def get_recent_thesis_reviews(db: Session = Depends(get_db), current_user: User 
     reviewed_trades = (
         db.query(Trade)
         .filter(Trade.user_id == current_user.id, Trade.outcome_tag.isnot(None))
-        .order_by(Trade.created_at.desc())
+        # Most recently GRADED first (was created_at, i.e. when the trade
+        # was logged). Grades from before graded_at existed sort last.
+        .order_by(Trade.graded_at.is_(None), Trade.graded_at.desc(), Trade.created_at.desc())
         .limit(10)
         .all()
     )
-
-    reviews = [
-        {
-            "id": t.id,
-            "ticker": t.ticker,
-            "action": t.action,
-            "thesis_text": t.thesis_text,
-            "conviction_score": t.conviction_score,
-            "outcome_tag": t.outcome_tag,
-            "review_notes": t.review_notes,
-        }
-        for t in reviewed_trades
-    ]
-    return {"reviews": reviews}
+    return {"reviews": [review_json(t) for t in reviewed_trades]}
 
 # Defines what a valid outcome update must look like
 class OutcomeUpdate(BaseModel):
-    outcome_tag: str  # expected: "correct", "incorrect", or "mixed"
-    review_notes: Optional[str] = None  # optional freeform reflection, saved alongside the grade
+    outcome_tag: str  # "correct", "incorrect" or "mixed" (checked in grading.apply_grade)
+    review_notes: Optional[str] = None  # freeform reflection; REQUIRED when the grade contradicts the numbers
 
 
 # Updates one specific trade's outcome_tag. Once set, that trade stops
@@ -766,18 +771,15 @@ class OutcomeUpdate(BaseModel):
 # PROTECTED + SCOPED: confirms the trade actually belongs to the logged-in
 # user before allowing the update - otherwise anyone could edit anyone
 # else's trade just by guessing an id number.
+# The rules live in grading.apply_grade: the grade is saved together with
+# the price numbers it was made against, and grading flatly against those
+# numbers (e.g. "correct" on a loser that lagged the market) needs a note.
 @app.patch("/trades/{trade_id}/outcome") #PATCH HTTP method updates something existing
 def update_trade_outcome(trade_id: int, update: OutcomeUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    trade = db.query(Trade).filter(Trade.id == trade_id, Trade.user_id == current_user.id).first()
-
-    if not trade:
-        raise HTTPException(status_code=404, detail=f"Trade with id {trade_id} not found")
-
-    trade.outcome_tag = update.outcome_tag
-    trade.review_notes = update.review_notes
-    db.commit()
-
-    return {"success": True, "id": trade_id, "outcome_tag": trade.outcome_tag, "review_notes": trade.review_notes}
+    trade = grading.apply_grade(db, current_user, trade_id, update.outcome_tag, update.review_notes)
+    return {"success": True, "id": trade_id, "outcome_tag": trade.outcome_tag, "review_notes": trade.review_notes,
+            "suggested_outcome": trade.suggested_outcome, "graded_return_pct": trade.graded_return_pct,
+            "graded_benchmark_return_pct": trade.graded_benchmark_return_pct}
 
 # Pulls recent news headlines via yfinance, sends them to Claude for a
 # single overall sentiment classification, and returns exactly one of:
@@ -943,35 +945,11 @@ def check_fomo_for_trade(trade):
     if trade.action != "buy":
         return {"fomo_flag": False, "reason": "Only buy trades are checked for FOMO"}
 
-    ticker = trade.ticker.upper()
+    # The rule itself (>8% move over ~5 trading days before the trade) lives
+    # in grading.fomo_from_closes, shared with the review scorecard.
     end_date = trade.trade_date
-    start_date = end_date - timedelta(days=10)
-
-    try:
-        stock = yf.Ticker(ticker)
-        history = stock.history(start=start_date.isoformat(), end=(end_date + timedelta(days=1)).isoformat())
-    except Exception as e:
-        print(f"yfinance history fetch failed for {ticker}: {e}")
-        return {"fomo_flag": False, "reason": "Could not fetch price history"}
-
-    if history.empty or len(history) < 2:
-        return {"fomo_flag": False, "reason": "Not enough price history available to check"}
-
-    price_at_trade = float(history["Close"].iloc[-1])
-    lookback_index = max(0, len(history) - 6)
-    price_before = float(history["Close"].iloc[lookback_index])
-
-    percent_change = float(((price_at_trade - price_before) / price_before) * 100)
-
-    FOMO_THRESHOLD = 8.0
-    significant_move = bool(abs(percent_change) > FOMO_THRESHOLD)
-
-    if significant_move and percent_change > 0:
-        return {"fomo_flag": True, "reason": f"Stock rose {round(percent_change, 2)}% in the days before this trade - possible FOMO entry"}
-    elif significant_move and percent_change < 0:
-        return {"fomo_flag": True, "reason": f"Stock dropped {round(percent_change, 2)}% in the days before this trade - possible 'buying the dip'"}
-    else:
-        return {"fomo_flag": False, "reason": "No significant price move detected before this trade"}
+    start_date = end_date - timedelta(days=grading.FOMO_LOOKBACK_DAYS)
+    return grading.fomo_from_closes(grading.fetch_daily_closes(trade.ticker, start_date, end_date))
 
 # Aggregates reviewed trades to surface behavioral patterns: whether higher
 # conviction actually correlates with better outcomes, and whether FOMO-flagged
@@ -1189,7 +1167,7 @@ Stated fear/mistake: {profile.biggest_fear or "not provided"}
     trades_summary = "\n".join(
     f"- {t.trade_date} {t.action.upper()} {t.ticker}: conviction "
     f"{f'{t.conviction_score}/5' if t.conviction_score else 'n/a'}, "
-    f"{thesis.describe_trade_reason(t)}, outcome: {t.outcome_tag or 'not yet reviewed'}"
+    f"{thesis.describe_trade_reason(t)}, outcome: {grading.describe_grade(t)}"
     + (f", reflection: \"{t.review_notes}\"" if t.review_notes else "")
     for t in recent_trades
 ) or "No trades logged yet."

@@ -27,6 +27,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+import grading
 import main
 from database import Base
 
@@ -67,7 +68,24 @@ def prices(monkeypatch):
 
 
 @pytest.fixture
-def client(db_session_factory, prices, monkeypatch):
+def history(monkeypatch):
+    """Fake daily closes for the grading scorecard: history["AAPL"] = [(date, close), ...].
+
+    Replaces grading.fetch_daily_closes (its only yfinance call). A ticker
+    that isn't in the table behaves like a failed download (no data), so
+    tests that don't care about prices still grade "from memory".
+    """
+    table = {}
+
+    def fake_fetch_daily_closes(ticker, start, end):
+        return [(d, c) for d, c in sorted(table.get(ticker.upper(), [])) if start <= d <= end]
+
+    monkeypatch.setattr(grading, "fetch_daily_closes", fake_fetch_daily_closes)
+    return table
+
+
+@pytest.fixture
+def client(db_session_factory, prices, history, monkeypatch):
     def override_get_db():
         db = db_session_factory()
         try:
@@ -108,7 +126,7 @@ LONG_AGO = date.today() - timedelta(days=30)
 
 
 def log_trade(client, headers, ticker, action, quantity, price, trade_date=LONG_AGO,
-              conviction=3, review_date=None):
+              conviction=3, review_date=None, reason_tags=None):
     """Logs a trade through the real POST /trades endpoint and returns its JSON."""
     response = client.post("/trades", headers=headers, json={
         "ticker": ticker,
@@ -120,6 +138,7 @@ def log_trade(client, headers, ticker, action, quantity, price, trade_date=LONG_
         "thesis_text": f"Test thesis for {ticker}",
         "conviction_score": conviction,
         "review_date": (review_date or date.today() + timedelta(days=30)).isoformat(),
+        "reason_tags": reason_tags or [],
     })
     assert response.status_code == 200, response.text
     return response.json()

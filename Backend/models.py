@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, Integer, String, Numeric, Date, DateTime, ForeignKey, Text, Time, UniqueConstraint
+from sqlalchemy import Boolean, Column, Integer, String, Numeric, Date, DateTime, Float, ForeignKey, Text, Time, UniqueConstraint
 from sqlalchemy.sql import false, func
 from database import Base
 
@@ -71,6 +71,16 @@ class Trade(Base):
     # reason written long after the fact deserves less trust - the advisor
     # is told which theses were written in hindsight.
     thesis_written_at = Column(DateTime, nullable=True)
+    # Grading snapshot (see grading.py): when the trade was graded, what the
+    # numbers suggested, and the returns the grade was made against - the
+    # trade's own return and the S&P 500's over the same days, in %, measured
+    # at the review date. Lets "which reasons actually make money" be
+    # answered later without re-downloading prices, and records when a
+    # grade went against the numbers.
+    graded_at = Column(DateTime, nullable=True)
+    suggested_outcome = Column(String, nullable=True)
+    graded_return_pct = Column(Float, nullable=True)
+    graded_benchmark_return_pct = Column(Float, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     # Where this trade came from: "manual" (logged through POST /trades),

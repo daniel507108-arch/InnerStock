@@ -210,23 +210,41 @@ def reasons_summary(db: Session, user: User) -> dict:
         for tag in parse_tags(trade):
             key = (trade.action, tag)
             entry = stats.setdefault(key, {"action": trade.action, "tag": tag, "label": label_for(trade.action, tag),
-                                           "count": 0, "convictions": [], "correct": 0, "incorrect": 0, "mixed": 0})
+                                           "count": 0, "convictions": [], "correct": 0, "incorrect": 0, "mixed": 0,
+                                           "returns": [], "excess": []})
             entry["count"] += 1
             if trade.conviction_score is not None:
                 entry["convictions"].append(trade.conviction_score)
             if trade.outcome_tag in ("correct", "incorrect", "mixed"):
                 entry[trade.outcome_tag] += 1
+            # Grading snapshot (grading.py): the trade's return at its review
+            # date, and how far ahead/behind the S&P 500 it was. Buys only - a
+            # sell's "return" is the move after selling, which isn't money made.
+            if trade.action == "buy" and trade.graded_return_pct is not None:
+                entry["returns"].append(trade.graded_return_pct)
+                if trade.graded_benchmark_return_pct is not None:
+                    entry["excess"].append(trade.graded_return_pct - trade.graded_benchmark_return_pct)
+
+    def avg(values):
+        return round(sum(values) / len(values), 1) if values else None
 
     by_reason = []
     for entry in sorted(stats.values(), key=lambda e: (-e["count"], e["tag"])):
         graded = entry["correct"] + entry["incorrect"] + entry["mixed"]
-        convictions = entry.pop("convictions")
+        convictions, returns, excess = entry.pop("convictions"), entry.pop("returns"), entry.pop("excess")
         by_reason.append({
             **entry,
-            "avg_conviction": round(sum(convictions) / len(convictions), 1) if convictions else None,
+            "avg_conviction": avg(convictions),
             "graded": graded,
             "correct_rate": round(entry["correct"] / graded * 100, 1) if graded else None,
+            "avg_return_pct": avg(returns),
+            "avg_vs_market_pct": avg(excess),
         })
+
+    # Grades given flatly against the numbers ("correct" when the price said
+    # incorrect, or vice versa) - each needed a written excuse. A high count
+    # means the user grades by feel rather than by results.
+    against_numbers = [t for t in trades if {t.suggested_outcome, t.outcome_tag} == {"correct", "incorrect"}]
 
     dont_remember = sum(1 for t in answered if parse_tags(t) == [DONT_REMEMBER])
     hindsight = sum(1 for t in answered if is_hindsight(t))
@@ -239,6 +257,7 @@ def reasons_summary(db: Session, user: User) -> dict:
         "dont_remember_rate": round(dont_remember / len(answered) * 100, 1) if answered else 0,
         "hindsight_count": hindsight,
         "hindsight_rate": round(hindsight / len(answered) * 100, 1) if answered else 0,
+        "graded_against_numbers": len(against_numbers),
     }
 
 
@@ -255,6 +274,10 @@ def advisor_context_section(db: Session, user: User) -> str:
             text += f", avg conviction {entry['avg_conviction']}/5"
         if entry["graded"]:
             text += f", {entry['graded']} graded, {entry['correct_rate']}% correct"
+        if entry["avg_return_pct"] is not None:
+            text += f", avg return {entry['avg_return_pct']:+.1f}%"
+            if entry["avg_vs_market_pct"] is not None:
+                text += f" ({entry['avg_vs_market_pct']:+.1f} pts vs S&P 500)"
         return text
 
     buys = [line(e) for e in summary["by_reason"] if e["action"] == "buy"]
@@ -267,6 +290,7 @@ def advisor_context_section(db: Session, user: User) -> str:
         f"Couldn't remember why: {summary['dont_remember_count']} trade(s) ({summary['dont_remember_rate']}% of answered).",
         f"Reasons written in hindsight (over {HINDSIGHT_AFTER.days} days after the trade): "
         f"{summary['hindsight_count']} ({summary['hindsight_rate']}%) - treat these as less reliable.",
+        f"Grades given against the price evidence (with a written excuse): {summary['graded_against_numbers']}.",
     ]
     return "\n".join(parts)
 
