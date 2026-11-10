@@ -713,6 +713,73 @@ input, select, textarea, button {
   margin-top: 4px;
 }
 
+/* --- Grading scorecard (ThesisReview.jsx) ---
+   The evidence shown next to the grade buttons: the trade's return at the
+   review date, the S&P 500 over the same days, a price chart since the
+   trade and the suggested grade. */
+.reason-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: var(--space-sm); }
+.reason-tag {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  padding: 2px 10px;
+}
+.reason-tag.hindsight { color: var(--color-warning); border-style: dashed; }
+
+.scorecard {
+  margin-top: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+.score-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-md); }
+.score-stat { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.score-label { font-size: var(--text-xs); color: var(--color-text-muted); }
+.score-value { font-size: var(--text-lg); font-weight: var(--font-weight-medium); color: var(--color-text-primary); }
+.score-value.positive, .recent-numbers .positive { color: var(--color-success); }
+.score-value.negative, .recent-numbers .negative { color: var(--color-danger); }
+.score-chart { margin-top: var(--space-sm); }
+.score-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px var(--space-md);
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+}
+.score-chart-legend .accent { color: var(--color-accent); }
+.score-empty, .score-note { margin-top: var(--space-sm); font-size: var(--text-xs); color: var(--color-text-muted); }
+
+.score-suggestion {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: var(--space-sm);
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+  color: var(--color-text-primary);
+}
+.score-suggestion svg { flex-shrink: 0; margin-top: 2px; }
+.score-suggestion.correct { background: var(--color-success-bg); }
+.score-suggestion.incorrect { background: var(--color-danger-bg); }
+.score-suggestion.mixed { background: var(--color-warning-bg); }
+
+.grade-btn.suggested { border-width: 2px; color: var(--color-text-primary); }
+.grade-btn.correct.suggested { border-color: var(--color-success); }
+.grade-btn.incorrect.suggested { border-color: var(--color-danger); }
+.grade-btn.mixed.suggested { border-color: var(--color-warning); }
+.grade-btn-hint { margin-left: 6px; font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.7; }
+
+.recent-numbers { font-size: var(--text-xs); color: var(--color-text-secondary); margin-top: 4px; }
+.recent-pills { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; flex-shrink: 0; }
+
+@media (max-width: 640px) {
+  .score-grid { grid-template-columns: 1fr; gap: var(--space-xs); }
+}
+
 /* =========================================================================
    Advisor — new this pass
    ========================================================================= */

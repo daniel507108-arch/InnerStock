@@ -201,7 +201,8 @@ def test_summary_counts_reasons_and_their_outcomes(client, alice, db_session_fac
     assert summary["dont_remember_rate"] == 25.0
     dip = next(r for r in summary["by_reason"] if r["tag"] == "dip_buy")
     assert dip == {"action": "buy", "tag": "dip_buy", "label": "Bought the dip", "count": 2, "correct": 1,
-                   "incorrect": 1, "mixed": 0, "avg_conviction": 4.0, "graded": 2, "correct_rate": 50.0}
+                   "incorrect": 1, "mixed": 0, "avg_conviction": 4.0, "graded": 2, "correct_rate": 50.0,
+                   "avg_return_pct": None, "avg_vs_market_pct": None}  # no price history in this test
 
 
 def test_reasons_written_long_after_the_trade_count_as_hindsight(client, alice, db_session_factory):
