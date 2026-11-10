@@ -532,6 +532,83 @@ input, select, textarea, button {
 .brokerage-card .brokerage-message { flex-basis: 100%; color: var(--color-text-secondary); font-size: var(--text-xs); }
 .brokerage-card .brokerage-message.error { color: var(--color-danger); }
 
+/* Trade reasons: chips (Log Trade + inbox), inbox rows, summary, nudges */
+.reason-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.reason-chip {
+  font-size: var(--text-xs);
+  color: var(--color-text-secondary);
+  background: var(--color-surface-alt);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+.reason-chip:hover { border-color: var(--color-accent); }
+.reason-chip.selected { background: var(--color-accent); color: var(--color-accent-ink); border-color: var(--color-accent); }
+.reason-chip.muted:not(.selected) { border-style: dashed; }
+
+.nav-badge {
+  margin-left: auto;
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--color-warning-fill);
+  color: var(--color-on-warning);
+  font-size: 11px;
+  text-align: center;
+}
+
+.inbox-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md);
+  flex-wrap: wrap;
+  margin-bottom: var(--space-md);
+  padding: var(--space-sm) var(--space-md);
+  background: var(--color-warning-bg);
+  color: var(--color-warning);
+  border-radius: var(--radius-md);
+  font-size: var(--text-sm);
+}
+
+.inbox-intro { color: var(--color-text-secondary); font-size: var(--text-sm); line-height: 1.55; max-width: 720px; margin: 0 0 var(--space-md); }
+.inbox-row { padding: 0; overflow: hidden; }
+.inbox-row.open { border-color: var(--color-border-strong); }
+.inbox-row-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-sm);
+  flex-wrap: wrap;
+  padding: var(--space-sm) var(--space-lg);
+  background: transparent;
+  border: none;
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.inbox-form { padding: 0 var(--space-lg) var(--space-lg); border-top: 1px dashed var(--color-border-strong); padding-top: var(--space-md); }
+.inbox-similar { display: flex; align-items: center; gap: 8px; font-size: var(--text-sm); color: var(--color-text-secondary); margin-bottom: var(--space-md); cursor: pointer; }
+.inbox-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+
+.reasons-summary { margin-bottom: var(--space-md); }
+.reasons-summary-body { padding: var(--space-md); display: grid; gap: 8px; }
+.reason-bar { display: grid; grid-template-columns: minmax(0, 220px) 1fr auto; align-items: center; gap: var(--space-sm); font-size: var(--text-sm); }
+.reason-bar-label { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.reason-bar-track { height: 8px; background: var(--color-surface-alt); border-radius: 999px; overflow: hidden; }
+.reason-bar-fill { display: block; height: 100%; background: var(--color-accent); border-radius: 999px; }
+.reason-bar-count { font-variant-numeric: tabular-nums; text-align: right; }
+.reasons-summary-flags { display: flex; gap: var(--space-lg); flex-wrap: wrap; margin-top: 4px; font-size: var(--text-xs); color: var(--color-text-secondary); }
+
+@media (max-width: 640px) {
+  .reason-bar { grid-template-columns: 1fr auto; }
+  .reason-bar-track { grid-column: 1 / -1; order: 3; }
+  .row-2 { grid-template-columns: 1fr; }
+}
+
 /* =========================================================================
    Thesis Review — new this pass
    ========================================================================= */

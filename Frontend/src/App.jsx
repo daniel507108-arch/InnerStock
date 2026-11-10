@@ -8,6 +8,7 @@ import ThesisReview from './components/ThesisReview'
 import ChatScreen from './components/ChatScreen'
 import { apiFetch } from './api'
 import SearchPage from './components/SearchPage'
+import ThesisInbox from './components/ThesisInbox'
 
 function App() {
   const [token, setToken] = useState(localStorage.getItem("token"))
@@ -17,6 +18,24 @@ function App() {
   // Tracks whether the logged-in user has completed the survey yet.
   // null = still checking, true = has a profile, false = needs the survey.
   const [hasProfile, setHasProfile] = useState(null)
+
+  // How many trades are still waiting for a reason (mostly ones synced
+  // from the brokerage). Shown as a sidebar badge and a dashboard nudge;
+  // refreshed after a sync, after answering, and whenever the view changes.
+  const [inboxCount, setInboxCount] = useState(0)
+
+  function refreshInboxCount() {
+    apiFetch("/trades/needs-thesis/count")
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data) => {
+        if (data) setInboxCount(data.count)
+      })
+      .catch(() => {})
+  }
+
+  useEffect(() => {
+    if (token && hasProfile) refreshInboxCount()
+  }, [token, hasProfile, activeView])
 
   // Whenever we have a token, check if a profile already exists for this
   // user - this runs once on login/app load, and again after the survey
@@ -87,12 +106,13 @@ function App() {
   return (
     <Layout
       activeView={activeView}
+      inboxCount={inboxCount}
       onNavigate={setActiveView}
       onLogout={handleLogout}
       onChangeContext={() => setActiveView('editprofile')}
     >
       {activeView === 'dashboard' && (
-  <Dashboard refreshKey={refreshKey} onNavigate={setActiveView} />
+  <Dashboard refreshKey={refreshKey} onNavigate={setActiveView} inboxCount={inboxCount} onBrokerageSynced={refreshInboxCount} />
 )}
       {activeView === 'editprofile' && (
         // Same component as the required first-time survey, just in
@@ -120,6 +140,9 @@ function App() {
       {activeView === 'search' && (
   <SearchPage />
 )}
+      {activeView === 'reasons' && (
+        <ThesisInbox onAnswered={(remaining) => setInboxCount(remaining)} />
+      )}
       {activeView === 'advisor' && (
         <ChatScreen />
       )}

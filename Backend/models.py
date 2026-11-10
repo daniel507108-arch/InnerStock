@@ -60,6 +60,17 @@ class Trade(Base):
     review_date = Column(Date, nullable=True)
     outcome_tag = Column(String, nullable=True)       # stays empty until resurfaced & graded
     review_notes = Column(Text, nullable=True)         # NEW — optional freeform reflection, added at grading time
+    # Why the trade was made, as fixed categories (comma-separated slugs, same
+    # storage pattern as UserProfile.sectors_of_interest) - see
+    # thesis.BUY_REASONS / SELL_REASONS. Categories are what make "you buy on
+    # tips and they lose" style patterns countable; the free-text thesis
+    # alone can't be aggregated. "dont_remember" is a valid, honest answer.
+    reason_tags = Column(String, nullable=True)
+    # When the thesis/reasons were actually written. Equal to the trade time
+    # for trades logged by hand; can be weeks later for synced trades, and a
+    # reason written long after the fact deserves less trust - the advisor
+    # is told which theses were written in hindsight.
+    thesis_written_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, server_default=func.now())
 
     # Where this trade came from: "manual" (logged through POST /trades),

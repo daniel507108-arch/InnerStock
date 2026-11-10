@@ -73,6 +73,11 @@ from deps import bearer_scheme, get_db, get_current_user
 from brokerage import router as brokerage_router
 app.include_router(brokerage_router)
 
+# "Why did you make this trade?" inbox + reasons summary: /trades/needs-thesis,
+# /trades/thesis, /trades/reasons, /trades/reasons-summary
+import thesis
+app.include_router(thesis.router)
+
 # This defines exactly what fields a new trade submission must contain, taken from Pydantic
 # If someone sends data missing a required field or with the wrong type,
 # FastAPI automatically rejects it with a clear error - before our code runs.
@@ -86,6 +91,10 @@ class TradeCreate(BaseModel):
     thesis_text: str
     conviction_score: int
     review_date: date
+    # Why the trade was made, from thesis.BUY_REASONS / SELL_REASONS.
+    # Optional at the API level so older clients keep working; the Log
+    # Trade form asks for at least one.
+    reason_tags: List[str] = []
 
 from pydantic import BaseModel, EmailStr
 
@@ -345,6 +354,7 @@ def get_price_at(ticker: str, trade_date: date, trade_time: str = None):
 # can create a trade under someone else's account.
 @app.post("/trades") # When front end sents POST request to /trades this will run
 def create_trade(trade: TradeCreate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)): #Uses function get_db to open a connection to database
+    reason_tags = thesis.validate_tags(trade.action, trade.reason_tags)
     new_trade = Trade( #CONSTRUCTOR
         user_id=current_user.id,  # taken from the logged-in user, not the client
         ticker=trade.ticker,
@@ -356,6 +366,8 @@ def create_trade(trade: TradeCreate, db: Session = Depends(get_db), current_user
         thesis_text=trade.thesis_text,
         conviction_score=trade.conviction_score,
         review_date=trade.review_date,
+        reason_tags=",".join(reason_tags) or None,
+        thesis_written_at=datetime.utcnow(),  # written at logging time, by definition
     )
     db.add(new_trade)      # stage the new trade for saving
     db.commit()             # actually save it to the database
@@ -1110,11 +1122,17 @@ Stated fear/mistake: {profile.biggest_fear or "not provided"}
     ) or "No current holdings."
 
     trades_summary = "\n".join(
-    f"- {t.trade_date} {t.action.upper()} {t.ticker}: conviction {t.conviction_score}/5, "
-    f"thesis: \"{t.thesis_text}\", outcome: {t.outcome_tag or 'not yet reviewed'}"
+    f"- {t.trade_date} {t.action.upper()} {t.ticker}: conviction "
+    f"{f'{t.conviction_score}/5' if t.conviction_score else 'n/a'}, "
+    f"{thesis.describe_trade_reason(t)}, outcome: {t.outcome_tag or 'not yet reviewed'}"
     + (f", reflection: \"{t.review_notes}\"" if t.review_notes else "")
     for t in recent_trades
 ) or "No trades logged yet."
+
+    # Why the user trades, in their own words/categories - updated every
+    # time they answer the thesis inbox, so the advisor's picture of their
+    # habits stays current (see thesis.advisor_context_section).
+    reasons_summary = thesis.advisor_context_section(db, current_user)
 
     patterns_summary = f"""
 Reviewed trades: {patterns_data['reviewed_count']}, pending review: {patterns_data['pending_count']}
@@ -1179,6 +1197,8 @@ Response formatting:
 
 When relevant, help the user recognize patterns in their own investing behavior—such as concentration risk, FOMO, or conviction consistency—using their actual data.
 
+The user's stated reasons for their trades (below) are the best evidence of how they actually invest. Compare what they say they do with what they do: e.g. which reasons tend to work for them, whether they often can't remember why they traded, or whether their stated style (profile) matches their real reasons. Treat reasons written in hindsight as less reliable.
+
 Do not give generic investing advice. Ground your answers in the real data below whenever relevant. You are not a licensed financial advisor; make that clear if the user asks for concrete buy/sell recommendations.
 
 === USER PROFILE ===
@@ -1197,6 +1217,9 @@ Average conviction across positions: {holdings_data['avg_conviction']}/5
 
 === BEHAVIORAL PATTERNS ===
 {patterns_summary}
+
+=== WHY THIS USER TRADES (their own stated reasons) ===
+{reasons_summary}
 """
 
 # The advisor chat. Saves the user's message, rebuilds full context fresh,
@@ -1290,9 +1313,11 @@ def get_chat_history(db: Session = Depends(get_db), current_user: User = Depends
 # /thesis-reviews which only shows trades whose review_date has passed.
 @app.get("/trades/incomplete")
 def get_incomplete_trades(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    # Same definition as the thesis inbox: no thesis AND no reason given
+    # (a "don't remember" answer has reasons but no thesis text).
     trades = (
         db.query(Trade)
-        .filter(Trade.user_id == current_user.id, Trade.thesis_text.is_(None))
+        .filter(*thesis.needs_reason_filter(current_user))
         .order_by(Trade.trade_date.desc())
         .all()
     )

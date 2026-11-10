@@ -6,12 +6,13 @@ import {
   IconMessageCircle,
   IconSearch,
   IconSettings,
+  IconHelpCircle,
 } from "@tabler/icons-react"
 import SidebarWatchlist from "./SidebarWatchlist"
 
 // One nav row. Pure presentation — active state and the click handler are
 // both owned by the parent, this component just renders what it's told.
-function NavItem({ label, active, onClick, icon }) {
+function NavItem({ label, active, onClick, icon, badge }) {
   return (
     <div
       onClick={onClick}
@@ -19,6 +20,8 @@ function NavItem({ label, active, onClick, icon }) {
     >
       {icon}
       {label}
+      {/* Count of items needing attention (e.g. trades without a reason) */}
+      {badge > 0 && <span className="nav-badge">{badge > 99 ? "99+" : badge}</span>}
     </div>
   )
 }
@@ -28,7 +31,7 @@ function NavItem({ label, active, onClick, icon }) {
 // `.main` and is responsible for its OWN topbar/content — Layout only
 // owns the parts that are identical on every screen: the brand mark,
 // the four nav items, and the logout control.
-function Layout({ activeView, onNavigate, onLogout, onChangeContext, children }) {
+function Layout({ activeView, inboxCount, onNavigate, onLogout, onChangeContext, children }) {
   return (
     <div className="app-shell">
       <div className="sidebar">
@@ -39,6 +42,7 @@ function Layout({ activeView, onNavigate, onLogout, onChangeContext, children })
         <nav className="nav">
           <NavItem label="Dashboard" active={activeView === "dashboard"} onClick={() => onNavigate("dashboard")} icon={<IconLayoutDashboard size={16} />} />
           <NavItem label="Log trade" active={activeView === "logtrade"} onClick={() => onNavigate("logtrade")} icon={<IconPlus size={16} />} />
+          <NavItem label="Trade reasons" active={activeView === "reasons"} onClick={() => onNavigate("reasons")} icon={<IconHelpCircle size={16} />} badge={inboxCount} />
           <NavItem label="Thesis review" active={activeView === "thesisreview"} onClick={() => onNavigate("thesisreview")} icon={<IconClock size={16} />} />
           <NavItem label="Search" active={activeView === "search"} onClick={() => onNavigate("search")} icon={<IconSearch size={16} />} />
           <NavItem label="Advisor" active={activeView === "advisor"} onClick={() => onNavigate("advisor")} icon={<IconMessageCircle size={16} />} />

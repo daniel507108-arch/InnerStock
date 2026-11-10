@@ -19,7 +19,7 @@ const PRICE_POLL_INTERVAL_MS = 60_000
 // step 5). Also new: the /holdings fetch now repeats on an interval instead
 // of firing once per mount, so prices stay current without the user having
 // to manually reload.
-function Dashboard({ refreshKey, onNavigate }) {
+function Dashboard({ refreshKey, onNavigate, inboxCount = 0, onBrokerageSynced }) {
   const [data, setData] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState(null)
@@ -157,7 +157,25 @@ function Dashboard({ refreshKey, onNavigate }) {
     <>
       {topbar}
       <div className="content">
-        <BrokerageCard onSynced={() => setSyncKey((k) => k + 1)} />
+        <BrokerageCard
+          onSynced={() => {
+            setSyncKey((k) => k + 1)
+            onBrokerageSynced?.()
+          }}
+        />
+        {inboxCount > 0 && (
+          // Accountability nudge: synced trades don't count as journaled
+          // until the user has said why they made them.
+          <div className="inbox-banner">
+            <span>
+              <strong>{inboxCount} trade{inboxCount === 1 ? " is" : "s are"} missing a reason.</strong>{" "}
+              Your journal (and your advisor) only learn from trades you explain.
+            </span>
+            <button className="btn btn-accent" onClick={() => onNavigate?.("reasons")}>
+              Explain them
+            </button>
+          </div>
+        )}
         {body}
       </div>
     </>
