@@ -45,6 +45,12 @@ CLAUDE_SONNET_4_6_OUTPUT_COST_PER_MTOK = 15.00
 from auth import hash_password, verify_password, create_access_token, decode_access_token
 from typing import List, Optional
 
+# For the AI rate limiter below. monotonic() is imported by name because
+# `time` is already taken by datetime's time class above.
+import threading
+from collections import defaultdict, deque
+from time import monotonic
+
 # Create the actual app instance. Everything below attaches to this "app" object.
 app = FastAPI()
 
@@ -77,6 +83,51 @@ app.include_router(brokerage_router)
 # /trades/thesis, /trades/reasons, /trades/reasons-summary
 import thesis
 app.include_router(thesis.router)
+
+# AI RATE LIMITING: every endpoint that can trigger a real Claude call
+# (sentiment, bull/bear, advisor chat) costs money per hit, so each user
+# gets a capped number of Claude calls per rolling window. Without this, a
+# logged-in user (or a script using their token) could loop over tickers
+# or spam the chat and run up the API bill with no ceiling.
+#
+# Buckets are separate so heavy dashboard use (one sentiment lookup per
+# holding) can't lock someone out of the advisor chat, and vice versa.
+# Values are (max_calls, window_seconds) - tune here if real usage needs it.
+#
+# Kept in memory on purpose: no new dependency or DB table needed. The
+# trade-off is that counts reset when the server restarts and aren't shared
+# across multiple worker processes - fine for a single uvicorn process, but
+# this would need to move to Redis or the DB once there are several workers.
+AI_RATE_LIMITS = {
+    "analysis": (60, 3600),  # /sentiment + /bullbear, Claude calls only (cache hits are free)
+    "chat": (40, 3600),      # /chat messages
+}
+_ai_call_log = defaultdict(deque)  # (user_id, bucket) -> timestamps of recent calls
+_ai_call_lock = threading.Lock()   # sync routes run in a threadpool, so guard the shared dict
+
+
+def enforce_ai_rate_limit(user_id: int, bucket: str):
+    max_calls, window_seconds = AI_RATE_LIMITS[bucket]
+    now = monotonic()
+
+    with _ai_call_lock:
+        calls = _ai_call_log[(user_id, bucket)]
+
+        # Drop timestamps that have aged out of the rolling window
+        while calls and now - calls[0] >= window_seconds:
+            calls.popleft()
+
+        if len(calls) >= max_calls:
+            # The oldest call in the window is the next one to expire, so
+            # that's how long until a slot frees up.
+            retry_after = int(window_seconds - (now - calls[0])) + 1
+            raise HTTPException(
+                status_code=429,
+                detail=f"AI request limit reached. Try again in about {max(1, retry_after // 60)} minute(s).",
+                headers={"Retry-After": str(retry_after)},
+            )
+
+        calls.append(now)
 
 # This defines exactly what fields a new trade submission must contain, taken from Pydantic
 # If someone sends data missing a required field or with the wrong type,
@@ -600,10 +651,17 @@ def get_holdings(db: Session = Depends(get_db), current_user: User = Depends(get
 
 # Uses Claude to generate a bull case, bear case, and key risk for a given
 # ticker, based on data we already have cached (no new yfinance call needed).
-# NOT user-scoped - stock-level analysis, not tied to a specific portfolio.
+# The analysis itself is stock-level (not tied to a specific portfolio), but
+# the route is PROTECTED: every hit is a paid Claude call, so it requires
+# login and counts against the user's "analysis" rate limit.
 @app.get("/bullbear/{ticker}")
-def get_bull_bear(ticker: str, db: Session = Depends(get_db)):
+def get_bull_bear(ticker: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ticker = ticker.upper()
+
+    # Checked before the price lookup too, so a rate-limited user doesn't
+    # trigger yfinance calls either. No cache on this route, so every
+    # request is a Claude call and always counts.
+    enforce_ai_rate_limit(current_user.id, "analysis")
 
     # Reuse the same helper /holdings uses - checks the cache first, and
     # automatically fetches fresh data from yfinance if it's missing or stale,
@@ -725,8 +783,10 @@ def update_trade_outcome(trade_id: int, update: OutcomeUpdate, db: Session = Dep
 # single overall sentiment classification, and returns exactly one of:
 # "positive", "neutral", "negative".
 # NOT user-scoped - stock-level sentiment, not tied to a specific portfolio.
-@app.get("/sentiment/{ticker}") 
-def get_sentiment(ticker: str, db: Session = Depends(get_db)):
+# PROTECTED: a cache miss here means a paid Claude call, so the route
+# requires login and cache misses count against the "analysis" rate limit.
+@app.get("/sentiment/{ticker}")
+def get_sentiment(ticker: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     ticker = ticker.upper()  # normalize, same habit as our other stock routes
 
     # Sentiment costs a real Claude API call to generate, unlike a price
@@ -743,6 +803,11 @@ def get_sentiment(ticker: str, db: Session = Depends(get_db)):
         if cached.sentiment == "unavailable":
             raise HTTPException(status_code=404, detail=f"No news available for ticker '{ticker}'")
         return {"ticker": ticker, "sentiment": cached.sentiment, "summary": cached.summary}
+
+    # Only cache misses reach this point, so fresh cache reads above never
+    # use up the user's limit - just the requests that lead to a new
+    # Claude call.
+    enforce_ai_rate_limit(current_user.id, "analysis")
 
     # Ask yfinance for recent news articles about this ticker.
     # stock.news is a DIFFERENT dataset than stock.info - this one returns
@@ -1228,6 +1293,10 @@ Average conviction across positions: {holdings_data['avg_conviction']}/5
 # own data and conversation.
 @app.post("/chat")
 def chat(payload: ChatMessageIn, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    # Checked before saving anything, so a rate-limited message isn't
+    # stored in history without a reply to go with it.
+    enforce_ai_rate_limit(current_user.id, "chat")
+
     # Save the user's new message first - stored immediately, before we
     # even talk to Claude, so it's never lost even if something below fails.
     user_message = ChatMessage(user_id=current_user.id, role="user", content=payload.message)
